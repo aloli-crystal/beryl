@@ -150,15 +150,49 @@ factorisation à viser plutôt que de dupliquer `install-pkgbase.sh`.
 * *Specs unitaires* sur le rendu du script (placeholders, ABI,
   escaping) — réutiliser/adapter ceux d'`Installer`.
 
-== Questions ouvertes (à trancher avant Phase 1)
+== Vérifications (sources officielles, juin 2026)
 
-. *URL du repo pkgbase.* `install-pkgbase.sh` pointe
-  `pkg+https://pkg.freebsd.org/${ABI}/base_release_0` +
-  `FreeBSD-pkg-bootstrap-15.0.pkg`. À vérifier : nom de branche repo
-  (`base_release_0` vs `base_latest`), disponibilité pour 15.0-RELEASE,
-  signature `fingerprints`.
-. *Détection ABI / arch.* `FreeBSD:15:amd64` vs `:arm64` (les dédiés
-  Aloli sont amd64 ; le banc QEMU local est arm64). Dériver de la cible.
+[cols="2,3", options="header"]
+|===
+| Question | Réponse vérifiée
+
+| URL du repo pkgbase
+| *Confirmé.* Pour 15.0-RELEASE :
+  `pkg+https://pkg.freebsd.org/${ABI}/base_release_0`
+  (`base_release_<VERSION_MINOR>`, donc `_0` pour 15.0). Host
+  `pkg.freebsd.org`. Bootstrap :
+  `.../base_release_0/FreeBSD-pkg-bootstrap-15.0.pkg`.
+
+| Signature / fingerprints
+| *BUG confirmé dans `install-pkgbase.sh`.* Le script met
+  `fingerprints: "/usr/share/keys/pkg"` ; la bonne valeur est
+  `/usr/share/keys/pkgbase-${VERSION_MAJOR}` → `/usr/share/keys/pkgbase-15`
+  (clés `trusted/awskms-15`, `trusted/backup-signing-15`). À corriger
+  en Phase 1.
+
+| `base_release_0` vs `base_latest`
+| `base_release_0` = figé sur 15.0-RELEASE (install reproductible, ce
+  qu'on veut). `base_latest` est plus complet (variants kernel) mais
+  suit l'amont. `FreeBSD-kernel-generic` est présent dans
+  `base_release_0` — suffisant pour une install standard.
+
+| ABI / arch
+| Dériver `FreeBSD:15:$(uname -p)` de la *cible*. pkgbase 15.0 publie
+  amd64 *et* arm64 → *le banc QEMU local (arm64) peut valider Phase 1*,
+  même si les dédiés Aloli sont amd64. NB : `Installer#abi` a un défaut
+  obsolète `FreeBSD:14:amd64` à passer à 15.
+
+| `pkg -c` (chroot) vs `--rootdir`
+| *À valider in vivo.* La communauté installe le base avec
+  `pkg -c /mnt …` (chroot), et `install-pkgbase.sh` fait pareil. MAIS
+  ADR-013 a montré que pkg dans un chroot incomplet meurt en `SIGSYS`
+  (Capsicum, `/dev/urandom` absent). Donc soit *monter devfs dans /mnt*
+  avant `pkg -c`, soit basculer sur `pkg --rootdir /mnt` (no-chroot,
+  cohérent ADR-013). Choix tranché par le test QEMU de Phase 1.
+|===
+
+== Questions encore ouvertes
+
 . *Réécrire vs réutiliser.* Garder `install-pkgbase.sh` autonome
   (simple) ou le fondre dans le driver `rescue-run-vm.sh` (factorisation
   post-base) ? Recommandation : factoriser la phase post-base, garder la
@@ -169,6 +203,10 @@ factorisation à viser plutôt que de dupliquer `install-pkgbase.sh`.
 . *Statut d'`Installer` (legacy).* Le code de rendu pkgbase vit dans la
   classe dépréciée `Installer`. Le déplacer/partager proprement vers le
   chemin `QemuInRescue` plutôt que ressusciter `Installer`.
+. *Présence des clés fingerprints dans mfsBSD SE 15.* Les clés
+  `/usr/share/keys/pkgbase-15/` doivent exister dans l'environnement
+  mfsBSD au moment de l'install (sinon les fetcher) — à vérifier en
+  Phase 1.
 
 == Liens
 
