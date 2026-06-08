@@ -1,0 +1,2 @@
+recipe: pas-le-bon-nom
+description: Fixture dont le champ recipe ne correspond pas au fichier.

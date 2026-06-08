@@ -9,6 +9,51 @@ et ce projet suit https://semver.org/lang/fr/[Semantic Versioning].
 
 == [Non publié]
 
+=== `beryl apply` — moteur de recettes (Phase 1, PoC)
+
+Réécriture de `beryl apply` selon l'architecture à 2 niveaux du
+document de design `apply-recipes-architecture.adoc` : des
+*primitives* Crystal natives idempotentes orchestrées par des
+*recettes YAML* reliées par un champ `requires:`.
+
+* *Avant* : `apply` monolithique qui synchronisait
+  `packages` / `sudoers` / `users` lus directement du YAML host.
+* *Après* : `apply` scanne le dossier d'orchestration du host
+  (`<config>/<société>/<domaine>/<host>/`), résout les `requires:`
+  (récursif + tri topologique + détection de cycle, override
+  dossier host prioritaire sur le dépôt central), puis exécute les
+  `steps:` via SSH avec un rapport final
+  « N étapes : X skipped, Y applied, Z failed ».
+
+[CAUTION]
+====
+*Rupture de comportement* : l'ancienne synchronisation
+packages/sudoers/clés SSH directe est retirée. Ces capacités
+reviennent en Phase 2 sous forme de primitives
+(`user-update-keys`, `sysrc-set`, …) et de recettes Aloli.
+====
+
+==== Code
+
+* Nouveau module `Beryl::Apply` (`src/beryl/apply/`) :
+** `Shell` / `SshShell` — abstraction du transport SSH (injectable
+   en test via `FakeShell`).
+** `Primitive` + registre + `pkg-install` (idempotente :
+   `pkg info` avant action, installe le delta).
+** `Recipe` / `Step` — parsing + validation (`recipe:` ==
+   nom de fichier).
+** `Resolver` — fermeture transitive des `requires:`, tri
+   topologique (Kahn), détection de cycle, override par dossier
+   host.
+** `Executor` — déroulé des steps, interpolation `{{ var }}`
+   scalaire, rapport agrégé. Stop net sur erreur.
+* `beryl apply` accepte `--check` comme synonyme de `--dry-run`.
+* Le bloc `recipes:` (`local_path`) du merge pointe le dépôt
+  central de recettes (défaut `<config>/recipes`).
+* Recettes PoC livrées dans `aloli-crystal/beryl-recipes`
+  (`base-packages`, `shell-tools`, `freebsd-updates`,
+  `post-install`).
+
 == 0.2.2 (8 mai 2026)
 
 === Migration XDG Base Directory

@@ -1,0 +1,5 @@
+recipe: base-packages
+description: Packages de base communs à tous les hosts.
+steps:
+  - pkg-install:
+      packages: [bash, git, curl]

@@ -1,0 +1,6 @@
+recipe: post-install
+description: Agrégat post-install demandé pour ce host.
+requires:
+  - freebsd-updates
+  - base-packages
+  - shell-tools

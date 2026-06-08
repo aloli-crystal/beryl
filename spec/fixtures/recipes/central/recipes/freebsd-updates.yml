@@ -1,0 +1,5 @@
+recipe: freebsd-updates
+description: Prérequis aux mises à jour FreeBSD.
+steps:
+  - pkg-install:
+      packages: [ca_root_nss]

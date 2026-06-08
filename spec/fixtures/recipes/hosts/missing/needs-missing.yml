@@ -1,0 +1,4 @@
+recipe: needs-missing
+description: Fixture dont un requires pointe vers une recette inexistante.
+requires:
+  - recette-inexistante

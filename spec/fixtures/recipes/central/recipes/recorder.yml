@@ -1,0 +1,11 @@
+recipe: recorder
+description: Fixture pour l'Executor (primitive de test + interpolation).
+parameters:
+  greeting:
+    type: string
+    default: bonjour
+arguments:
+  greeting: salut
+steps:
+  - test-record:
+      msg: "{{ greeting }} le monde"

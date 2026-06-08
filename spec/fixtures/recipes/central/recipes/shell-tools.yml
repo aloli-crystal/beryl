@@ -1,0 +1,7 @@
+recipe: shell-tools
+description: Outils de shell, dépend des packages de base.
+requires:
+  - base-packages
+steps:
+  - pkg-install:
+      packages: [zsh, tmux]

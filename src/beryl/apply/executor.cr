@@ -1,0 +1,130 @@
+require "./primitive"
+require "./recipe"
+require "./template"
+
+module Beryl::Apply
+  # Levée quand un step référence une primitive inconnue du registre.
+  class UnknownPrimitive < Exception
+  end
+
+  # Rapport d'exécution : un enregistrement par step + des compteurs
+  # agrégés pour la ligne finale (« N étapes : X skipped, Y applied,
+  # Z failed »).
+  class Report
+    record Entry, recipe : String, step : String, result : StepResult
+
+    getter entries = [] of Entry
+
+    def <<(entry : Entry) : Nil
+      @entries << entry
+    end
+
+    def total : Int32
+      @entries.size
+    end
+
+    def skipped : Int32
+      @entries.count(&.result.outcome.skipped?)
+    end
+
+    def applied : Int32
+      @entries.count(&.result.outcome.applied?)
+    end
+
+    def failed : Int32
+      @entries.count(&.result.outcome.failed?)
+    end
+
+    def summary_line : String
+      "#{total} étape(s) : #{skipped} skipped, #{applied} applied, #{failed} failed"
+    end
+  end
+
+  # Déroule des recettes déjà ordonnées (cf. `Resolver`) : pour chaque
+  # recette, chaque step est dispatché vers sa primitive. Les valeurs
+  # string des params sont interpolées (`{{ var }}`) à partir des
+  # `arguments`/`parameters` de la recette.
+  #
+  # Idempotence : c'est chaque primitive qui lit l'état réel et décide
+  # skip/apply. En `dry_run`, rien n'est modifié.
+  #
+  # Stop net sur erreur (décision de design) : un step qui échoue
+  # (`SSH::CommandFailed`) est marqué `failed`, le déroulé s'arrête, le
+  # rapport partiel est retourné. L'opérateur corrige et relance —
+  # l'idempotence skippe ce qui était déjà OK.
+  class Executor
+    def initialize(@shell : Shell, @dry_run : Bool = false)
+    end
+
+    def run(recipes : Array(Recipe)) : Report
+      report = Report.new
+      recipes.each do |recipe|
+        vars = build_vars(recipe)
+        recipe.steps.each do |step|
+          primitive = Primitive[step.name]? || raise UnknownPrimitive.new(
+            "primitive `#{step.name}` inconnue (recette `#{recipe.name}`). " \
+            "Primitives connues : #{Primitive.registry.keys.sort.join(", ")}."
+          )
+          params = interpolate(step.params, vars)
+          result =
+            begin
+              primitive.apply(@shell, params, @dry_run)
+            rescue ex : SSH::CommandFailed
+              StepResult.failed(ex.message || "commande distante échouée")
+            end
+          report << Report::Entry.new(recipe: recipe.name, step: step.name, result: result)
+          log("#{recipe.name} › #{step.name} : #{describe(result)}")
+          return report if result.outcome.failed?
+        end
+      end
+      report
+    end
+
+    # Construit la table des variables scalaires interpolables :
+    # défauts déclarés dans `parameters`, écrasés par les `arguments`
+    # concrets. Seuls les scalaires string sont retenus (Phase 1).
+    private def build_vars(recipe : Recipe) : Hash(String, String)
+      vars = {} of String => String
+      recipe.parameters.each do |key, decl|
+        if dh = decl.as_h?
+          if default = dh[YAML::Any.new("default")]?.try(&.as_s?)
+            vars[key] = default
+          end
+        end
+      end
+      recipe.arguments.each do |key, value|
+        if s = value.as_s?
+          vars[key] = s
+        end
+      end
+      vars
+    end
+
+    # Interpole les valeurs string contenant `{{ … }}`. Les autres
+    # valeurs (listes, scalaires sans placeholder) passent inchangées.
+    private def interpolate(params : Hash(String, YAML::Any), vars : Hash(String, String)) : Hash(String, YAML::Any)
+      out = {} of String => YAML::Any
+      params.each do |key, value|
+        if (s = value.as_s?) && Template.has_placeholder?(s)
+          out[key] = YAML::Any.new(Template.render(s, vars))
+        else
+          out[key] = value
+        end
+      end
+      out
+    end
+
+    private def describe(result : StepResult) : String
+      tag = case result.outcome
+            in Outcome::Skipped then "skip"
+            in Outcome::Applied then @dry_run ? "would apply" : "applied"
+            in Outcome::Failed  then "FAILED"
+            end
+      "#{tag} — #{result.message}"
+    end
+
+    private def log(message : String) : Nil
+      STDERR.puts "[#{Beryl.format_timestamp(Time.local)}] [beryl apply] #{message}"
+    end
+  end
+end

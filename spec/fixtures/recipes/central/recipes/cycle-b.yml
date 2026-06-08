@@ -1,0 +1,4 @@
+recipe: cycle-b
+description: Fixture de cycle (B requiert A).
+requires:
+  - cycle-a
