@@ -26,7 +26,7 @@ shards:
 
   silex:
     git: https://github.com/aloli-crystal/silex.git
-    version: 0.1.2+git.commit.21395317443e3f6c6625a862ac73e38769c4cc41
+    version: 0.1.2+git.commit.090dcaac8de8e56d1400f328d9c5acc63922605b
 
   ssh:
     git: https://github.com/aloli-crystal/ssh.git
