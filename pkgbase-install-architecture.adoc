@@ -130,15 +130,36 @@ factorisation à viser plutôt que de dupliquer `install-pkgbase.sh`.
 ====
 *Avancement Phase 1.*
 
-* ✅ *Fait* — Bug `fingerprints` corrigé dans `install-pkgbase.sh`
-  (`/usr/share/keys/pkg` → `/usr/share/keys/pkgbase-${VERSION_MAJOR}`),
-  + spec de non-régression (`installer_spec`).
-* ⏳ *Reste* — Le câblage runtime (driver pkgbase dans `QemuInRescue`,
-  réutilisant la machinerie QEMU de `rescue-run-vm.sh` : on remplace les
-  étapes « fetch tarballs + bsdinstall » par « scp + run
-  install-pkgbase.sh »), lever le gate, puis *itération QEMU in vivo*
-  (comme le banc apply) pour trancher `pkg -c` vs `--rootdir` et la
-  présence des clés pkgbase dans mfsBSD. C'est l'effort lourd restant.
+*✅ `install-pkgbase.sh` validé in vivo* — installé puis *booté* dans
+une VM QEMU FreeBSD 15 aarch64 (cible disque vierge) : le système
+pkgbase démarre jusqu'au `login:` avec le bon hostname, ZFS root,
+réseau et sshd. 4 bugs réels trouvés + corrigés par l'itération :
+
+. *fingerprints* — `/usr/share/keys/pkg` (clés des ports) →
+  `/usr/share/keys/pkgbase-${VERSION_MAJOR}` (clés du base). Les clés
+  existent bien dans l'image 15.0.
+. *`pkg -c /mnt` (chroot) impossible* sur cible vide (« Unable to
+  determine the ABI »). → `pkg --rootdir /mnt` (no-chroot, conforme
+  ADR-013), pkg s'exécutant sur l'hôte d'install.
+. *Clés introuvables en `--rootdir`* (« Error opening the trusted
+  directory ») : pkg résout `fingerprints` *relativement à /mnt*. →
+  copier `/usr/share/keys/pkgbase-<maj>` dans la cible avant l'install.
+. *Noms de paquets* — `FreeBSD-openssh-server`/`-openssh` →
+  `FreeBSD-ssh` ; `FreeBSD-libexec`/`-libcompat`/`-pkg` inexistants
+  (inclus dans `runtime` / hors base) → remplacés par
+  `FreeBSD-clibs` + `FreeBSD-utilities`. + bootloader EFI arch-aware
+  (BOOTX64 amd64 / BOOTAA64 arm64).
+
+*⏳ À confirmer* — DHCP/réseau : le boot local n'a pas obtenu d'IPv4
+(SSH injoignable). Probable timing DHCP QEMU ou client DHCP à
+expliciter (aucun paquet `dhc*` dans le repo base — `dhclient`
+vraisemblablement dans `FreeBSD-runtime`). À trancher au prochain run.
+
+*⏳ Reste (câblage beryl)* — Router `install_type: packages` dans
+`QemuInRescue` (driver pkgbase réutilisant la machinerie QEMU de
+`rescue-run-vm.sh`), lever le gate, puis *test grandeur nature sur un
+vrai serveur dédié en rescue* (amd64). Le script d'install étant
+prouvé, ce reste est surtout du câblage + un essai bare-metal.
 ====
 
 . *Phase 2 — parité base* +
