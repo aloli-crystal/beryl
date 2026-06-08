@@ -5,7 +5,7 @@ require "../../../support/apply_helpers"
 describe Beryl::Apply::UserCreate do
   it "skip si l'utilisateur existe déjà" do
     shell = FakeShell.new
-    shell.stub(/pw show/, exit_code: 0)
+    shell.stub(/pw usershow/, exit_code: 0)
     result = prim("user-create").apply(shell, apply_params("name: deploy"), dry_run: false, context: ctx)
     result.outcome.should eq(Beryl::Apply::Outcome::Skipped)
     shell.ran?(/pw useradd/).should be_false
@@ -13,7 +13,7 @@ describe Beryl::Apply::UserCreate do
 
   it "crée l'utilisateur absent avec shell et groupes" do
     shell = FakeShell.new
-    shell.stub(/pw show/, exit_code: 1)
+    shell.stub(/pw usershow/, exit_code: 1)
     result = prim("user-create").apply(
       shell,
       apply_params("{name: deploy, shell: /usr/local/bin/zsh, groups: [wheel, www]}"),
@@ -27,7 +27,7 @@ describe Beryl::Apply::UserCreate do
 
   it "n'effectue rien en dry-run" do
     shell = FakeShell.new
-    shell.stub(/pw show/, exit_code: 1)
+    shell.stub(/pw usershow/, exit_code: 1)
     result = prim("user-create").apply(shell, apply_params("name: deploy"), dry_run: true, context: ctx)
     result.outcome.should eq(Beryl::Apply::Outcome::Applied)
     shell.ran?(/pw useradd/).should be_false

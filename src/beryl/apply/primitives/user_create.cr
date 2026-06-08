@@ -51,9 +51,11 @@ module Beryl::Apply
       StepResult.applied("user #{user} créé")
     end
 
-    # `pw show <user>` retourne 0 si l'utilisateur existe.
+    # `pw usershow <user>` retourne 0 si l'utilisateur existe. (Et non
+    # `pw show <user>`, qui est une syntaxe invalide — `pw` attend
+    # `usershow`/`groupshow`/… ; validé sur le banc QEMU FreeBSD.)
     private def exists?(shell : Shell, user : String) : Bool
-      shell.exec("pw show #{Process.quote(user)} >/dev/null 2>&1", raise_on_error: false).success?
+      shell.exec("pw usershow #{Process.quote(user)} >/dev/null 2>&1", raise_on_error: false).success?
     end
   end
 

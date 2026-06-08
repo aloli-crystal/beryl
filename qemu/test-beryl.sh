@@ -167,14 +167,14 @@ EOF
 # du résolveur SSH qui ne sait pas lire un chemin absolu — voir
 # ssh_key_resolver.cr).
 PUB_KEY_INLINE="$(cat "${BENCH_PUB_KEY}")"
-cat > "${BERYL_TEST_ROOT}/qemu/test.yml" <<EOF
+cat > "${BERYL_TEST_ROOT}/qemu/test.domain.yml" <<EOF
 ssh_keys:
   - ${PUB_KEY_INLINE}
 EOF
 
 # Host clientvm (ssh_host: 127.0.0.1 explicite, validé par le fix
 # 3b19dfb du 28 avril 2026).
-cat > "${BERYL_TEST_ROOT}/qemu/test/clientvm.yml" <<EOF
+cat > "${BERYL_TEST_ROOT}/qemu/test/clientvm.host.yml" <<EOF
 provider: local
 ssh_host: 127.0.0.1
 port: 2223
@@ -241,7 +241,7 @@ assert_contains "T1bis idempotence" "déjà importé" \
   run_beryl unlock qemu/clientvm
 
 log "T2 — bascule en mode tang single-Tang"
-cat > "${BERYL_TEST_ROOT}/qemu/test/clientvm.yml" <<EOF
+cat > "${BERYL_TEST_ROOT}/qemu/test/clientvm.host.yml" <<EOF
 provider: local
 ssh_host: 127.0.0.1
 port: 2223
@@ -276,7 +276,7 @@ assert_contains "T2 unlock mode tang single" "mode tang : ${TANG_URL_1}" \
   run_beryl unlock qemu/clientvm
 
 log "T3 — bascule en SSS multi-Tang (3 Tangs threshold 2)"
-cat > "${BERYL_TEST_ROOT}/qemu/test/clientvm.yml" <<EOF
+cat > "${BERYL_TEST_ROOT}/qemu/test/clientvm.host.yml" <<EOF
 provider: local
 ssh_host: 127.0.0.1
 port: 2223

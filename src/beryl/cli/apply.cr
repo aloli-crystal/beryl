@@ -78,7 +78,7 @@ module Beryl::CLI::Apply
     # Dossier d'orchestration : à côté du fichier host, dérivé de son
     # `source_path` (`<host>.host.yml` → `<host>/`). Correct aussi
     # pour un host en groupe (`<groupe>/<host>.host.yml` → `<groupe>/<host>/`).
-    host_dir = host.node.source_path.rchop(Beryl::Config::Loader::HOST_SUFFIX)
+    host_dir = host.node.source_path.rchop(Beryl::Config::HOST_SUFFIX)
     central_dir = central_recipes_dir(config_root, host)
 
     resolver = Beryl::Apply::Resolver.new(host_dir, central_dir)
