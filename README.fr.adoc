@@ -1,4 +1,5 @@
-= beryl
+= Beryl
+:title-page:
 :toc: left
 :toc-title: Table des matières
 :toclevels: 3
@@ -15,7 +16,7 @@ Licence : MIT (voir section en bas de page).
 
 [NOTE]
 ====
-beryl se place *avant* https://github.com/aloli-crystal/deploy[deploy] :
+Beryl se place *avant* https://github.com/aloli-crystal/deploy[deploy] :
 il prépare le serveur FreeBSD (OS, users, paquets système, clés SSH, durcissement sshd),
 puis deploy déploie les applications Marten ou Kemal par-dessus.
 ====
@@ -98,19 +99,19 @@ Le *rescue Dedibox* est une image Debian 12 préparée par l'API. Particularité
 critique : le user du rescue n'est *pas* `root` mais `sd-<id>` (ex : `sd-186260`).
 Le password est généré par l'API à chaque appel `prepare_rescue`, et la clé SSH
 IAM liée au compte est *injectée automatiquement* dans `/home/sd-<id>/.ssh/authorized_keys`
-par la plateforme. beryl orchestre ensuite une promotion vers `root` pour que le
+par la plateforme. Beryl orchestre ensuite une promotion vers `root` pour que le
 reste du flow (scan, bootstrap, apply) fonctionne comme sur OVH.
 
 Le flow `beryl rescue <host>` affiche quatre étapes numérotées :
 
-. *1/4* — `prepare_rescue(server_id, image=debian-12_amd64)` : récupère le login
+* *1/4* — `prepare_rescue(server_id, image=debian-12_amd64)` : récupère le login
   `sd-<id>` et le password temporaire.
-. *2/4* — `reboot(server_id, reason="beryl rescue")`. L'API Dedibox retourne
+* *2/4* — `reboot(server_id, reason="beryl rescue")`. L'API Dedibox retourne
   parfois `false` sur ce POST alors que le hardware reboot bien ; beryl loggue
   un warning et poursuit sur le signal TCP réel.
-. *2b/4* — attente de la chute de sshd (preuve que le hardware a lâché).
-. *3/4* — attente que `sd-<id>@host` réponde (rescue Debian prêt).
-. *4/4* — promote : copie `authorized_keys` dans `/root/.ssh/` et active
+* *2b/4* — attente de la chute de sshd (preuve que le hardware a lâché).
+* *3/4* — attente que `sd-<id>@host` réponde (rescue Debian prêt).
+* *4/4* — promote : copie `authorized_keys` dans `/root/.ssh/` et active
   `PermitRootLogin yes` via `sudo -S` (password envoyé sur stdin, jamais
   sur la ligne de commande).
 
@@ -123,28 +124,28 @@ possible, mais le PTR reste à poser manuellement sur https://console.online.net
 Exemple concret, une commande par bloc pour permettre le copier-coller
 individuel :
 
-1. Bascule en rescue Debian via l'API Dedibox (4 étapes numérotées).
+. Bascule en rescue Debian via l'API Dedibox (4 étapes numérotées).
 +
 [source,console]
 ----
 beryl rescue aloli/186260 --provider=dedibox
 ----
 +
-2. Scan des disques, pose des records A/AAAA, écriture de `cookie.aloli.net.yml`.
+. Scan des disques, pose des records A/AAAA, écriture de `cookie.aloli.net.yml`.
 +
 [source,console]
 ----
 beryl scan aloli/186260 --provider=dedibox --dns --write --hostname=cookie
 ----
 +
-3. Efface les pools ZFS / partitions résiduels sur les disques déclarés.
+. Efface les pools ZFS / partitions résiduels sur les disques déclarés.
 +
 [source,console]
 ----
 beryl wipe aloli/cookie.aloli.net
 ----
 +
-4. Installe FreeBSD 15 via mfsBSD-in-QEMU.
+. Installe FreeBSD 15 via mfsBSD-in-QEMU.
 +
 [source,console]
 ----
@@ -155,7 +156,7 @@ beryl bootstrap aloli/cookie.aloli.net
 
 OVH identifie un serveur dédié par son `service_name` textuel, généralement de
 la forme `ns3156789.ip-51-83-6.eu`. Les credentials s'obtiennent via
-`beryl add-provider aloli/ovh` : beryl guide la création d'un token sur
+`beryl add-provider aloli/ovh` : Beryl guide la création d'un token sur
 https://eu.api.ovh.com/createToken/ puis appelle `POST /auth/credential` pour
 générer une consumer key avec l'ensemble exact des access rules nécessaires.
 
@@ -168,7 +169,7 @@ en deux temps côté API :
   `done`). Un `log_step` vivant affiche le temps passé dans chaque état, ce
   qui permet à l'opérateur de voir immédiatement si une transition bloque.
 
-Une fois la task `done`, beryl attend le retour SSH sur `root@host`. La clé SSH
+Une fois la task `done`, Beryl attend le retour SSH sur `root@host`. La clé SSH
 à injecter dans le rescue doit être déclarée dans le panel OVH ; son label
 (`ssh_key_name`) est ensuite référencé par `ovh.ssh_key_name` dans le YAML
 domaine. Si le compte OVH ne contient *qu'une seule* clé, beryl l'auto-sélectionne
@@ -246,7 +247,7 @@ automatiquement* `rescue` → `root` après le retour SSH : copie de
 Les commandes suivantes (`scan`, `bootstrap`, `apply`) se connectent alors en
 `root@host` comme ailleurs.
 
-Avant le reboot Rescue, beryl effectue un *pre-check* (étape 1/3 dans les logs) :
+Avant le reboot Rescue, Beryl effectue un *pre-check* (étape 1/3 dans les logs) :
 il lit `install.ssh_key_ids` du serveur, récupère chaque clé publique par son
 ID, et compare le base64 avec la clé locale `host.identity_file.pub`. Si la
 clé locale n'est pas dans la liste, beryl refuse de procéder et pointe
@@ -277,7 +278,8 @@ beryl scaleway-reinstall aloli/9783705f-f86f-4bf7-88ad-4c92b920e9ba
 +
 [source,console]
 ----
-beryl scan aloli/9783705f-f86f-4bf7-88ad-4c92b920e9ba --provider=scaleway --dns --write --hostname=chouquette
+beryl scan aloli/9783705f-f86f-4bf7-88ad-4c92b920e9ba --provider=scaleway --dns --write \
+--hostname=chouquette
 ----
 +
 4. Efface les pools ZFS / partitions résiduels.

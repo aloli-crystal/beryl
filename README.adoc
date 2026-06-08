@@ -1,4 +1,5 @@
 = beryl
+:title-page:
 :toc: left
 :toc-title: Table of Contents
 :toclevels: 3
