@@ -68,8 +68,17 @@ module Beryl::CLI::Apply
       return EXIT_USAGE
     end
 
-    # Dossier d'orchestration du host et dépôt central de recettes.
-    host_dir = File.join(config_root, host.account_name, host.domain_name, host.short_name)
+    # Un host virtuel (pas de fichier `<host>.host.yml`) n'a pas de
+    # dossier d'orchestration — rien à appliquer.
+    if host.virtual
+      log "aucune recette pour #{host.fqdn} (host virtuel, pas de dossier d'orchestration)."
+      return EXIT_OK
+    end
+
+    # Dossier d'orchestration : à côté du fichier host, dérivé de son
+    # `source_path` (`<host>.host.yml` → `<host>/`). Correct aussi
+    # pour un host en groupe (`<groupe>/<host>.host.yml` → `<groupe>/<host>/`).
+    host_dir = host.node.source_path.rchop(Beryl::Config::Loader::HOST_SUFFIX)
     central_dir = central_recipes_dir(config_root, host)
 
     resolver = Beryl::Apply::Resolver.new(host_dir, central_dir)

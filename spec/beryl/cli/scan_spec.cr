@@ -331,7 +331,7 @@ describe Beryl::CLI::Scan do
         config_root: "/tmp/.config/beryl", account_name: "aloli",
         domain_name: "aloli.net", short: "loulou",
       )
-      result.should eq("/tmp/.config/beryl/aloli/aloli.net/loulou.yml")
+      result.should eq("/tmp/.config/beryl/aloli/aloli.net/loulou.host.yml")
     end
 
     it "retourne le chemin explicite quand fourni (write_path gagne)" do

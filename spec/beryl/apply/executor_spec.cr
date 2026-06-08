@@ -4,7 +4,7 @@ require "../../support/fake_shell"
 private CENTRAL = File.expand_path(File.join(__DIR__, "..", "..", "fixtures", "recipes", "central", "recipes"))
 
 private def central_recipe(name : String) : Beryl::Apply::Recipe
-  Beryl::Apply::Recipe.load(File.join(CENTRAL, "#{name}.yml"))
+  Beryl::Apply::Recipe.load(File.join(CENTRAL, "#{name}.recipe.yml"))
 end
 
 # Primitive de test : enregistre les params reçus (interpolés) et

@@ -3,26 +3,45 @@ require "yaml"
 module Beryl::Config
   # Lit l'arborescence `~/.config/beryl/` et construit un `Root` exploitable.
   #
-  # Nouvelle arborescence (ADR-014) :
+  # Arborescence (ADR-014) — *extensions typées* : le type de chaque
+  # fichier est explicite dans son nom, ce qui supprime toute
+  # ambiguïté de forme (un dossier `<host>/` d'orchestration apply ne
+  # peut plus être confondu avec un groupe).
   #
   #   ~/.config/beryl/
   #   ├── _default.yml
   #   ├── .env.yml
   #   ├── <société>/
   #   │   ├── _account.yml            # optionnel : métadonnées société
-  #   │   ├── <domaine>.yml
+  #   │   ├── .env.toml.age           # optionnel : coffre credentials chiffré
+  #   │   ├── <domaine>.domain.yml
   #   │   ├── <domaine>/              # hosts directs + groupes
-  #   │   │   ├── <host>.yml
-  #   │   │   └── <groupe>/
-  #   │   │       ├── <host>.yml
-  #   │   │       └── ...
+  #   │   │   ├── <host>.host.yml
+  #   │   │   ├── <host>/             # orchestration apply (recettes) — ignoré ici
+  #   │   │   │   └── <recette>.recipe.yml
+  #   │   │   └── <groupe>.group.yml
+  #   │   │       + <groupe>/
+  #   │   │           ├── <host>.host.yml
+  #   │   │           └── ...
   #   │   └── ...
   #   └── <autre société>/
+  #
+  # Règle de typage :
+  #   - `*.domain.yml` → domaine ;
+  #   - `*.host.yml`   → host (direct, ou membre d'un groupe) ;
+  #   - `*.group.yml`  → groupe (ses membres vivent dans `<groupe>/`) ;
+  #   - `*.recipe.yml` → recette (lue par `beryl apply`, ignorée ici).
   #
   # Tolère les fichiers/dossiers absents : une société peut avoir un
   # seul domaine sans sous-dossier d'hosts, un `_default.yml` peut
   # manquer, etc. Seul `~/.config/beryl/` lui-même peut être absent (on
   # retourne un Root vide).
+  #
+  # Suffixes typés (un seul endroit où ils sont déclarés).
+  DOMAIN_SUFFIX = ".domain.yml"
+  HOST_SUFFIX   = ".host.yml"
+  GROUP_SUFFIX  = ".group.yml"
+
   module Loader
     # Alias pour le tuple retourné par `.load`.
     alias Result = NamedTuple(
@@ -95,17 +114,17 @@ module Beryl::Config
     end
 
     # Scanne le dossier d'une société pour identifier les domaines
-    # (fichiers `<domaine>.yml` sauf `_*.yml` et fichiers cachés).
+    # (fichiers `<domaine>.domain.yml`, hors `_*` et fichiers cachés).
     def self.load_domains(account_dir : String) : Hash(String, Domain)
       domains = {} of String => Domain
 
-      Dir.glob(File.join(account_dir, "*.yml")).sort.each do |yml_path|
-        basename = File.basename(yml_path, ".yml")
+      Dir.glob(File.join(account_dir, "*#{DOMAIN_SUFFIX}")).sort.each do |yml_path|
+        basename = File.basename(yml_path)
         next if basename.starts_with?("_")
         next if basename.starts_with?(".")
 
-        domain = load_domain(account_dir, basename, yml_path)
-        domains[basename] = domain
+        domain_name = basename.rchop(DOMAIN_SUFFIX)
+        domains[domain_name] = load_domain(account_dir, domain_name, yml_path)
       end
 
       domains
@@ -133,26 +152,51 @@ module Beryl::Config
       )
     end
 
-    # Scanne le dossier d'un domaine :
-    # - Chaque `.yml` à la racine du dossier est UN host direct
-    #   (sauf fichiers spéciaux `_*.yml`).
-    # - Chaque sous-dossier est un groupe. Son `.yml` de définition
-    #   est le fichier `<groupe>.yml` à côté du dossier.
+    # Scanne le dossier d'un domaine — purement piloté par les
+    # extensions typées, plus aucune devinette par forme :
+    # - `*.host.yml` à la racine = host direct ;
+    # - `*.group.yml` = groupe ; ses membres sont les `*.host.yml`
+    #   du sous-dossier `<groupe>/` ;
+    # - tout le reste (dossiers d'orchestration `<host>/`, fichiers
+    #   `*.recipe.yml`) est ignoré par le loader (relève de `apply`).
     def self.load_domain_contents(domain_dir : String) : {Hash(String, HostNode), Hash(String, Group)}
       direct_hosts = {} of String => HostNode
       groups = {} of String => Group
 
       entries = Dir.children(domain_dir).sort
-      yml_files = entries.select(&.ends_with?(".yml"))
-      sub_dirs = entries.select { |e| File.directory?(File.join(domain_dir, e)) }
 
-      sub_dirs.each do |group_dir_name|
-        group_yml = "#{group_dir_name}.yml"
-        group_yml_path = yml_files.includes?(group_yml) ? File.join(domain_dir, group_yml) : nil
+      # Hosts directs.
+      entries.select(&.ends_with?(HOST_SUFFIX)).each do |file|
+        name = File.basename(file).rchop(HOST_SUFFIX)
+        next if name.starts_with?("_")
+        path = File.join(domain_dir, file)
+        direct_hosts[name] = HostNode.new(
+          name: name,
+          raw: parse_yaml_hash(path),
+          source_path: path,
+        )
+      end
 
-        group_hosts = {} of String => HostNode
-        Dir.glob(File.join(domain_dir, group_dir_name, "*.yml")).sort.each do |host_yml|
-          host_name = File.basename(host_yml, ".yml")
+      # Groupes (déclarés explicitement par un `<groupe>.group.yml`).
+      entries.select(&.ends_with?(GROUP_SUFFIX)).each do |file|
+        group_name = File.basename(file).rchop(GROUP_SUFFIX)
+        next if group_name.starts_with?("_")
+        group_yml_path = File.join(domain_dir, file)
+        groups[group_name] = load_group(domain_dir, group_name, group_yml_path)
+      end
+
+      {direct_hosts, groups}
+    end
+
+    # Charge un groupe : sa définition `<groupe>.group.yml` + les
+    # hosts (`*.host.yml`) de son sous-dossier `<groupe>/`.
+    def self.load_group(domain_dir : String, group_name : String, group_yml_path : String) : Group
+      group_dir = File.join(domain_dir, group_name)
+      group_hosts = {} of String => HostNode
+
+      if File.directory?(group_dir)
+        Dir.glob(File.join(group_dir, "*#{HOST_SUFFIX}")).sort.each do |host_yml|
+          host_name = File.basename(host_yml).rchop(HOST_SUFFIX)
           next if host_name.starts_with?("_")
           group_hosts[host_name] = HostNode.new(
             name: host_name,
@@ -160,28 +204,14 @@ module Beryl::Config
             source_path: host_yml,
           )
         end
-
-        groups[group_dir_name] = Group.new(
-          name: group_dir_name,
-          raw: group_yml_path ? parse_yaml_hash(group_yml_path) : empty_hash,
-          hosts: group_hosts,
-          source_path: group_yml_path,
-        )
       end
 
-      yml_files.each do |yml|
-        host_name = File.basename(yml, ".yml")
-        next if host_name.starts_with?("_")
-        next if sub_dirs.includes?(host_name)
-
-        direct_hosts[host_name] = HostNode.new(
-          name: host_name,
-          raw: parse_yaml_hash(File.join(domain_dir, yml)),
-          source_path: File.join(domain_dir, yml),
-        )
-      end
-
-      {direct_hosts, groups}
+      Group.new(
+        name: group_name,
+        raw: parse_yaml_hash(group_yml_path),
+        hosts: group_hosts,
+        source_path: group_yml_path,
+      )
     end
 
     # Parse un fichier YAML attendu à la racine comme un hash.

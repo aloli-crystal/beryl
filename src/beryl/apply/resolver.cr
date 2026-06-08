@@ -50,22 +50,22 @@ module Beryl::Apply
       topo_sort(loaded)
     end
 
-    # Noms des recettes explicitement demandées (fichiers `*.yml` du
-    # dossier host), triés.
+    # Noms des recettes explicitement demandées (fichiers
+    # `*.recipe.yml` du dossier host), triés.
     def scan_host_dir : Array(String)
       return [] of String unless Dir.exists?(@host_dir)
-      Dir.glob(File.join(@host_dir, "*.yml"))
-        .map { |p| File.basename(p, ".yml") }
+      Dir.glob(File.join(@host_dir, "*#{Recipe::SUFFIX}"))
+        .map { |p| File.basename(p).rchop(Recipe::SUFFIX) }
         .sort
     end
 
-    # Localise et charge `R.yml` : override dossier host prioritaire,
-    # sinon dépôt central.
+    # Localise et charge `<name>.recipe.yml` : override dossier host
+    # prioritaire, sinon dépôt central.
     private def lookup(name : String, requirer : String?) : Recipe
-      host_path = File.join(@host_dir, "#{name}.yml")
+      host_path = File.join(@host_dir, "#{name}#{Recipe::SUFFIX}")
       return Recipe.load(host_path) if File.exists?(host_path)
 
-      central_path = File.join(@central_dir, "#{name}.yml")
+      central_path = File.join(@central_dir, "#{name}#{Recipe::SUFFIX}")
       return Recipe.load(central_path) if File.exists?(central_path)
 
       origin = requirer ? " (requise par `#{requirer}`)" : ""
