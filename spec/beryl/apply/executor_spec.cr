@@ -16,7 +16,7 @@ class TestRecorder < Beryl::Apply::Primitive
     "test-record"
   end
 
-  def apply(shell : Beryl::Apply::Shell, params : Hash(String, YAML::Any), dry_run : Bool) : Beryl::Apply::StepResult
+  def apply(shell : Beryl::Apply::Shell, params : Hash(String, YAML::Any), dry_run : Bool, context : Beryl::Apply::Context) : Beryl::Apply::StepResult
     TestRecorder.last_params = params
     Beryl::Apply::StepResult.applied("recorded")
   end

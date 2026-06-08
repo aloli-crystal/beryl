@@ -15,7 +15,7 @@ describe Beryl::Apply::PkgInstall do
   it "skip si tous les packages sont déjà installés" do
     shell = FakeShell.new
     shell.stub(/pkg info/, stdout: "bash\ncurl\ngit\n")
-    result = pkg_install.apply(shell, params("packages: [bash, git]"), dry_run: false)
+    result = pkg_install.apply(shell, params("packages: [bash, git]"), dry_run: false, context: Beryl::Apply::Context.new)
     result.outcome.should eq(Beryl::Apply::Outcome::Skipped)
     shell.ran?(/pkg install/).should be_false
   end
@@ -23,7 +23,7 @@ describe Beryl::Apply::PkgInstall do
   it "installe uniquement le delta manquant" do
     shell = FakeShell.new
     shell.stub(/pkg info/, stdout: "bash\n")
-    result = pkg_install.apply(shell, params("packages: [bash, git, curl]"), dry_run: false)
+    result = pkg_install.apply(shell, params("packages: [bash, git, curl]"), dry_run: false, context: Beryl::Apply::Context.new)
     result.outcome.should eq(Beryl::Apply::Outcome::Applied)
     result.message.should contain("git")
     result.message.should contain("curl")
@@ -34,7 +34,7 @@ describe Beryl::Apply::PkgInstall do
   it "n'installe rien en dry-run mais annonce le delta" do
     shell = FakeShell.new
     shell.stub(/pkg info/, stdout: "")
-    result = pkg_install.apply(shell, params("packages: [git]"), dry_run: true)
+    result = pkg_install.apply(shell, params("packages: [git]"), dry_run: true, context: Beryl::Apply::Context.new)
     result.outcome.should eq(Beryl::Apply::Outcome::Applied)
     result.message.should contain("dry-run")
     shell.ran?(/pkg install/).should be_false
@@ -42,7 +42,7 @@ describe Beryl::Apply::PkgInstall do
 
   it "skip proprement si aucun package déclaré" do
     shell = FakeShell.new
-    result = pkg_install.apply(shell, params("packages: []"), dry_run: false)
+    result = pkg_install.apply(shell, params("packages: []"), dry_run: false, context: Beryl::Apply::Context.new)
     result.outcome.should eq(Beryl::Apply::Outcome::Skipped)
   end
 end

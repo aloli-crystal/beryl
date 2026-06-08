@@ -90,7 +90,8 @@ module Beryl::CLI::Apply
     end
 
     shell = Beryl::Apply::SshShell.new(conn)
-    report = Beryl::Apply::Executor.new(shell, dry_run).run(recipes)
+    context = Beryl::Apply::Context.new(protected_keys: connecting_pubkeys(host))
+    report = Beryl::Apply::Executor.new(shell, dry_run, context).run(recipes)
 
     log "apply terminé pour #{host.fqdn}#{dry_run ? " (dry-run)" : ""} — #{report.summary_line}"
     report.failed > 0 ? EXIT_RECIPE : EXIT_OK
@@ -136,6 +137,28 @@ module Beryl::CLI::Apply
         File.join(config_root, "recipes")
       end
     File.join(local_path, "recipes")
+  end
+
+  # Clé(s) publique(s) que beryl utilise pour se connecter, dérivée(s)
+  # de `host.identity_file` via `ssh-keygen -y`. Alimente le garde-fou
+  # de `user-update-keys` (refus de retirer la clé en cours d'usage).
+  # Best-effort : si la clé est absente, chiffrée ou illisible, on
+  # retourne une liste vide (pas de garde-fou plutôt qu'un plantage).
+  private def self.connecting_pubkeys(host : Beryl::Config::ResolvedHost) : Array(String)
+    idf = host.identity_file
+    return [] of String unless idf && File.exists?(idf)
+    buf = IO::Memory.new
+    status = Process.run(
+      "ssh-keygen",
+      ["-y", "-f", idf],
+      output: buf,
+      error: Process::Redirect::Close,
+      input: Process::Redirect::Close,
+    )
+    return [] of String unless status.success?
+    buf.to_s.lines.map(&.strip).reject(&.empty?)
+  rescue
+    [] of String
   end
 
   private def self.log(message : String) : Nil

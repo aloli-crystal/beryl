@@ -18,7 +18,7 @@ module Beryl::Apply
       "pkg-install"
     end
 
-    def apply(shell : Shell, params : Hash(String, YAML::Any), dry_run : Bool) : StepResult
+    def apply(shell : Shell, params : Hash(String, YAML::Any), dry_run : Bool, context : Context) : StepResult
       packages = string_array(params, "packages")
       return StepResult.skipped("aucun package déclaré") if packages.empty?
 

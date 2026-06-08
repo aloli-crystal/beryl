@@ -6,12 +6,23 @@
 #   * Niveau 2 — RECETTES YAML : fichiers `.yml` reliés par `requires:`,
 #     résolus récursivement + tri topologique, exécutés step par step.
 #
-# Phase 1 (PoC) : `pkg-install` + résolveur + exécuteur. Les autres
-# primitives (`service-enable`, `sysrc-set`, `user-update-keys`, …)
-# arrivent en Phase 2.
+# Primitives disponibles : pkg-install, pkg-remove, service-enable,
+# service-disable, sysrc-set, file-write, file-template, user-create,
+# user-update-keys, sshd-config-set, pf-rule, cron-entry. Les recettes
+# Aloli (ssh-hardening, firewall-pf, …) qui les composent relèvent de
+# la Phase 3 (dépôt aloli-crystal/beryl-recipes).
 require "./apply/shell"
 require "./apply/primitive"
 require "./apply/primitives/pkg_install"
+require "./apply/primitives/pkg_remove"
+require "./apply/primitives/service"
+require "./apply/primitives/sysrc_set"
+require "./apply/primitives/file_write"
+require "./apply/primitives/user_create"
+require "./apply/primitives/user_update_keys"
+require "./apply/primitives/sshd_config_set"
+require "./apply/primitives/pf_rule"
+require "./apply/primitives/cron_entry"
 require "./apply/template"
 require "./apply/recipe"
 require "./apply/resolver"

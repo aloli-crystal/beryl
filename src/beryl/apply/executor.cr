@@ -53,7 +53,7 @@ module Beryl::Apply
   # rapport partiel est retourné. L'opérateur corrige et relance —
   # l'idempotence skippe ce qui était déjà OK.
   class Executor
-    def initialize(@shell : Shell, @dry_run : Bool = false)
+    def initialize(@shell : Shell, @dry_run : Bool = false, @context : Context = Context.new)
     end
 
     def run(recipes : Array(Recipe)) : Report
@@ -68,9 +68,11 @@ module Beryl::Apply
           params = interpolate(step.params, vars)
           result =
             begin
-              primitive.apply(@shell, params, @dry_run)
+              primitive.apply(@shell, params, @dry_run, @context)
             rescue ex : SSH::CommandFailed
               StepResult.failed(ex.message || "commande distante échouée")
+            rescue ex : Primitive::PrimitiveError
+              StepResult.failed(ex.message || "erreur de primitive")
             end
           report << Report::Entry.new(recipe: recipe.name, step: step.name, result: result)
           log("#{recipe.name} › #{step.name} : #{describe(result)}")

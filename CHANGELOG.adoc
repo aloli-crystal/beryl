@@ -54,6 +54,33 @@ reviennent en Phase 2 sous forme de primitives
   (`base-packages`, `shell-tools`, `freebsd-updates`,
   `post-install`).
 
+==== Phase 2 — couverture des primitives
+
+Jeu complet des primitives de la section 7 du doc de design, chacune
+idempotente (lecture d'état réel avant action) et testée :
+
+* `pkg-remove` — `pkg delete` du delta présent.
+* `service-enable` / `service-disable` — `sysrc <svc>_enable` +
+  `service start`/`stop` (état lu via `sysrc -n` + `onestatus`).
+* `sysrc-set` — variable `/etc/rc.conf` (skip si `sysrc -n` déjà à la
+  cible).
+* `file-write` / `file-template` — écriture idempotente (SHA-256) avec
+  `mode`/`owner` vérifiés via `stat`.
+* `user-create` — `pw useradd` (skip si `pw show` trouve l'utilisateur).
+* `user-update-keys` — synchro `authorized_keys` (set, comparaison
+  type+blob). *Garde-fou* : refus de retirer la clé que beryl utilise
+  pour se connecter (dérivée de `identity_file` via `ssh-keygen -y`,
+  portée par `Context`).
+* `sshd-config-set` — directive dans `sshd_config.d/beryl.conf`,
+  validée (`sshd -t`) et `service sshd reload` si changement.
+* `pf-rule` — règle dans un bloc géré de `/etc/pf.conf`, validée
+  (`pfctl -nf` sur fichier temporaire) avant bascule + `pfctl -f`.
+* `cron-entry` — ligne dans un bloc géré de la crontab d'un user.
+
+Ajustement : `Beryl::Apply::Context` transmis aux primitives (porte les
+clés protégées) ; `Primitive::PrimitiveError` (param manquant,
+garde-fou) traité comme step `failed` (stop net).
+
 == 0.2.2 (8 mai 2026)
 
 === Migration XDG Base Directory

@@ -1,0 +1,89 @@
+require "digest/sha256"
+require "../primitive"
+
+module Beryl::Apply
+  # Primitive `file-write` : écrit un fichier avec un contenu donné.
+  #
+  # Idempotence : SHA-256 du contenu distant comparé au contenu cible
+  # (skip si identique). `mode` (ex: "0640") et `owner` (ex: "root:wheel"
+  # ou "deploy") sont optionnels et vérifiés/corrigés via `stat`.
+  #
+  #     - file-write:
+  #         path: /usr/local/etc/exemple.conf
+  #         content: |
+  #           ligne 1
+  #           ligne 2
+  #         mode: "0644"        # optionnel
+  #         owner: root:wheel   # optionnel
+  #
+  # Note : le contenu (valeur string) est déjà interpolé `{{ var }}`
+  # par l'`Executor` ; `file-template` n'est qu'un alias explicite.
+  class FileWrite < Primitive
+    def name : String
+      "file-write"
+    end
+
+    def apply(shell : Shell, params : Hash(String, YAML::Any), dry_run : Bool, context : Context) : StepResult
+      path = required_string(params, "path")
+      content = required_string(params, "content")
+      mode = string(params, "mode")
+      owner = string(params, "owner")
+
+      desired_hash = Digest::SHA256.hexdigest(content)
+      remote_hash = shell.exec("sha256 -q #{Process.quote(path)} 2>/dev/null", raise_on_error: false).stdout.strip
+
+      need_write = remote_hash != desired_hash
+      need_chmod = mode_differs?(shell, path, mode, file_absent: remote_hash.empty?)
+      need_chown = owner_differs?(shell, path, owner, file_absent: remote_hash.empty?)
+
+      if !need_write && !need_chmod && !need_chown
+        return StepResult.skipped("#{path} à jour")
+      end
+
+      actions = [] of String
+      actions << "contenu" if need_write
+      actions << "mode #{mode}" if need_chmod
+      actions << "owner #{owner}" if need_chown
+      msg = "#{path} : #{actions.join(", ")}"
+      return StepResult.applied("#{msg} (dry-run)") if dry_run
+
+      shell.write_file(path, content) if need_write
+      shell.exec("chmod #{Process.quote(mode.not_nil!)} #{Process.quote(path)}") if need_chmod
+      shell.exec("chown #{Process.quote(owner.not_nil!)} #{Process.quote(path)}") if need_chown
+      StepResult.applied(msg)
+    end
+
+    # Vrai si `mode` est demandé et diffère du mode distant (comparaison
+    # en octal). Si le fichier est absent, il sera créé → on chmod.
+    private def mode_differs?(shell : Shell, path : String, mode : String?, file_absent : Bool) : Bool
+      return false unless mode
+      return true if file_absent
+      remote = shell.exec("stat -f %Lp #{Process.quote(path)} 2>/dev/null", raise_on_error: false).stdout.strip
+      mode.to_i?(8) != remote.to_i?(8)
+    end
+
+    # Vrai si `owner` est demandé et diffère du propriétaire distant.
+    # `owner` peut être "user" ou "user:group".
+    private def owner_differs?(shell : Shell, path : String, owner : String?, file_absent : Bool) : Bool
+      return false unless owner
+      return true if file_absent
+      fmt = owner.includes?(':') ? "%Su:%Sg" : "%Su"
+      remote = shell.exec("stat -f #{fmt} #{Process.quote(path)} 2>/dev/null", raise_on_error: false).stdout.strip
+      remote != owner
+    end
+  end
+
+  # Primitive `file-template` : sémantiquement « file-write avec
+  # interpolation ». L'interpolation `{{ var }}` étant déjà faite par
+  # l'`Executor` sur les valeurs string, le comportement est identique
+  # à `file-write`. Conservée comme nom explicite pour la lisibilité
+  # des recettes.
+  class FileTemplate < FileWrite
+    def name : String
+      "file-template"
+    end
+  end
+
+  Primitive.register(FileWrite.new)
+  Primitive.register(FileTemplate.new)
+end
