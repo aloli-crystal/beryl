@@ -9,6 +9,75 @@ et ce projet suit https://semver.org/lang/fr/[Semantic Versioning].
 
 == [Non publié]
 
+== 0.4.0 (13 mai 2026)
+
+=== Headscale Phases 2 → 4 — 5 nouvelles primitives + flag `--transport overlay`
+
+Suite directe de la v0.3.0 (qui livrait `beryl env` pour les
+credentials chiffrés par société). v0.4.0 livre tout le code beryl
+restant pour le déploiement Headscale décrit dans la roadmap interne
+`roadmap_beryl_headscale.md`. Les recettes correspondantes vivent
+côté `aloli-crystal/beryl-recipes`.
+
+==== 5 nouvelles primitives
+
+* `headscale-join` (Phase 2) — joint un host au mesh via
+  `tailscale up --login-server=URL --authkey=KEY`. Idempotent
+  (`tailscale status` exit 0 → skip). La clé d'auth est lue depuis
+  une variable d'env (`authkey_env_var: HEADSCALE_AUTHKEY`) côté
+  beryl, jamais sur la ligne de commande de la recette. Stderr
+  potentiellement leaké est masqué (substitution `[REDACTED]`).
+* `assert-env-var` (Phase 3) — refuse la suite de la recette si une
+  variable d'env (côté beryl, poste opérateur) est absente ou vide.
+  Use case : forcer `BERYL_REASON='...'` avant un changement
+  sensible.
+* `assert-tailscale-up` (Phase 3) — refuse la suite si l'interface
+  `tailscale0` du host cible n'est pas UP ou si la session est trop
+  récente (`min_uptime_seconds`, défaut 30). Garde-fou avant la
+  bascule en `sshd-overlay-only`.
+* `auto-close-schedule` (Phase 3) — pose un `at +Nh` qui rejoue une
+  autre recette sur ce même host (typiquement
+  `sshd-public-close`). Idempotent : un job déjà posé sous le même
+  `tag:` est remplacé. Le tag distingue plusieurs fenêtres
+  concurrentes.
+* `headscale-state-commit` (Phase 3) — append une ligne au fichier
+  `audit.log` du repo `aloli-aloli/headscale-state` puis
+  `git add && commit && push`. Sérialisé via `flock`. Pré-requis :
+  recipe `headscale-backup` déjà appliquée (repo cloné sur le host).
+
+==== Extension de `sshd-config-set` : `value_from_command`
+
+`sshd-config-set` accepte désormais `value_from_command:` (mutuellement
+exclusif avec `value:`). La commande est exécutée côté serveur cible,
+son stdout strippé devient la valeur de la directive. Cas d'usage
+principal : la recette `sshd-overlay-only` qui doit poser
+`ListenAddress <ip-tailscale>` sans connaître cette IP à l'avance.
+
+==== Phase 4 — flag global `--transport=public|overlay`
+
+Nouveau flag global du CLI `beryl` (avant la sous-commande) qui
+bascule la résolution de `ssh_host` pour tous les sous-commandes qui
+font SSH :
+
+  beryl --transport=overlay apply loulou.aloli.net
+
+Quand `--transport=overlay` est actif ET que le host a un champ
+`overlay_ip:` dans son YAML (typiquement `100.64.0.5`), c'est cette
+IP qui est utilisée pour la connexion SSH au lieu du FQDN public.
+Pas de fallback automatique (le flag dit explicitement "via mesh") ;
+si `overlay_ip` est absent, on retombe sur la résolution publique
+normale.
+
+`ResolvedHost#overlay_ip` est exposée pour les tests et debug.
+
+==== Tests
+
+* +20 examples (4 par primitive, 4 sur le switch transport_mode).
+  Total : 330 examples, 0 failures.
+* Le couplage `ResolvedHost#ssh_host` × `Beryl.transport_mode` est
+  validé par les tests unitaires du switch + tests d'intégration
+  manuels (les recettes Headscale tournant sur des hosts FreeBSD).
+
 == 0.3.0 (13 mai 2026)
 
 === `beryl env` — credentials chiffrés par société

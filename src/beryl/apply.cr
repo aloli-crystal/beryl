@@ -8,9 +8,11 @@
 #
 # Primitives disponibles : pkg-install, pkg-remove, service-enable,
 # service-disable, sysrc-set, file-write, file-template, user-create,
-# user-update-keys, sshd-config-set, pf-rule, cron-entry. Les recettes
-# Aloli (ssh-hardening, firewall-pf, …) qui les composent relèvent de
-# la Phase 3 (dépôt aloli-crystal/beryl-recipes).
+# user-update-keys, sshd-config-set, pf-rule, cron-entry,
+# headscale-join, assert-env-var, assert-tailscale-up,
+# auto-close-schedule, headscale-state-commit. Les recettes Aloli
+# (ssh-hardening, firewall-pf, headscale-*, …) qui les composent
+# vivent dans le dépôt aloli-crystal/beryl-recipes.
 require "./apply/shell"
 require "./apply/primitive"
 require "./apply/primitives/pkg_install"
@@ -23,6 +25,11 @@ require "./apply/primitives/user_update_keys"
 require "./apply/primitives/sshd_config_set"
 require "./apply/primitives/pf_rule"
 require "./apply/primitives/cron_entry"
+require "./apply/primitives/headscale_join"
+require "./apply/primitives/assert_env_var"
+require "./apply/primitives/assert_tailscale_up"
+require "./apply/primitives/auto_close_schedule"
+require "./apply/primitives/headscale_state_commit"
 require "./apply/template"
 require "./apply/recipe"
 require "./apply/resolver"

@@ -9,6 +9,28 @@ require "./beryl/providers"
 require "./beryl/encryption"
 
 module Beryl
+  # Transport SSH par défaut : `:public` (IP/FQDN publique de l'hébergeur)
+  # ou `:overlay` (IP `100.64.x.y` du mesh Headscale, lue depuis le champ
+  # `overlay_ip:` du YAML host). Le flag `--transport=overlay` du CLI
+  # apply (Phase 4 Headscale) bascule ce mode globalement pour la durée
+  # de la commande. Stocké comme variable de module (état global mais
+  # short-lived) plutôt qu'enrichir la signature de tous les `ssh_host`
+  # appelants.
+  @@transport_mode : Symbol = :public
+
+  def self.transport_mode : Symbol
+    @@transport_mode
+  end
+
+  def self.transport_mode=(mode : Symbol) : Symbol
+    raise ArgumentError.new("transport_mode invalide : #{mode.inspect} (attendu :public ou :overlay)") unless mode == :public || mode == :overlay
+    @@transport_mode = mode
+  end
+
+  def self.use_overlay_transport? : Bool
+    @@transport_mode == :overlay
+  end
+
   # Largeur cible en caractères pour aligner le compteur `[NNNs]` en fin
   # de ligne sur toutes les sous-commandes (rescue, bootstrap, …). Le
   # padding se fait par `String#size` pour éviter que `printf %-Ns`

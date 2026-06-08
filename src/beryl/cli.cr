@@ -40,7 +40,7 @@ require "./cli/env"
 # +~/.beryl/+ (non-XDG). Pour migrer : `mv ~/.beryl ~/.config/beryl`.
 module Beryl::CLI
   # Options globales qui consomment l'argument suivant (forme « -c VALEUR »).
-  GLOBAL_FLAGS_WITH_VALUE = {"-c", "--config"}
+  GLOBAL_FLAGS_WITH_VALUE = {"-c", "--config", "--transport"}
 
   # Racine de config par défaut (dynamique : honore `$XDG_CONFIG_HOME`
   # si défini au runtime). Voir `Beryl::Xdg.config_dir`.
@@ -68,6 +68,17 @@ module Beryl::CLI
     global_parser = OptionParser.new do |p|
       p.banner = usage_banner
       p.on("-c PATH", "--config=PATH", "Racine de configuration (défaut : ~/.config/beryl)") { |v| config_root = File.expand_path(v, home: true) }
+      p.on("--transport=MODE", "Transport SSH : public (défaut) ou overlay (via mesh Headscale)") do |v|
+        case v
+        when "public"
+          Beryl.transport_mode = :public
+        when "overlay"
+          Beryl.transport_mode = :overlay
+        else
+          STDERR.puts "beryl : --transport=#{v} invalide (attendu : public ou overlay)"
+          exit 64
+        end
+      end
       p.on("-h", "--help", "Affiche cette aide") do
         puts p
         exit(0)

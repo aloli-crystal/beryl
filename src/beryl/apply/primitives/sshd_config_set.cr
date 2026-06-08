@@ -12,6 +12,16 @@ module Beryl::Apply
   #     - sshd-config-set:
   #         key: PermitRootLogin
   #         value: "no"
+  #
+  # Cas où la valeur dépend d'un état runtime (ex. IP de l'interface
+  # tailscale0 inconnue à l'écriture de la recette) : utiliser
+  # `value_from_command` à la place. La commande est exécutée côté
+  # serveur cible, son stdout strippé devient la valeur. Échec
+  # (exit ≠ 0 ou stdout vide) → la primitive `fail`.
+  #
+  #     - sshd-config-set:
+  #         key: ListenAddress
+  #         value_from_command: "tailscale ip -4"
   class SshdConfigSet < Primitive
     PATH = "/etc/ssh/sshd_config.d/beryl.conf"
 
@@ -23,7 +33,27 @@ module Beryl::Apply
 
     def apply(shell : Shell, params : Hash(String, YAML::Any), dry_run : Bool, context : Context) : StepResult
       key = required_string(params, "key")
-      value = required_string(params, "value")
+
+      static_value = string(params, "value")
+      cmd_value = string(params, "value_from_command")
+
+      if static_value.nil? && cmd_value.nil?
+        return StepResult.failed("ni `value` ni `value_from_command` fournis")
+      end
+      if static_value && cmd_value
+        return StepResult.failed("`value` et `value_from_command` sont mutuellement exclusifs")
+      end
+
+      value = if cmd = cmd_value
+                probe = shell.exec(cmd, raise_on_error: false)
+                resolved = probe.stdout.strip
+                if !probe.success? || resolved.empty?
+                  return StepResult.failed("`value_from_command` (#{cmd}) retourne vide ou échoue : #{probe.stderr.strip}")
+                end
+                resolved
+              else
+                static_value.not_nil!
+              end
 
       directives = parse(shell.exec("cat #{Process.quote(PATH)} 2>/dev/null", raise_on_error: false).stdout)
 

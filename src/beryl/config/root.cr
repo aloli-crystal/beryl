@@ -531,11 +531,25 @@ module Beryl::Config
       @merged[YAML::Any.new("os")]?.try(&.as_s?) || "freebsd"
     end
 
+    # IP overlay (mesh Headscale) déclarée dans le YAML host
+    # (`overlay_ip: 100.64.x.y`). Lue par `ssh_host` quand le mode
+    # transport global est `:overlay` — cf. Phase 4 de la roadmap
+    # Headscale dans la mémoire `roadmap_beryl_headscale.md`.
+    def overlay_ip : String?
+      @merged[YAML::Any.new("overlay_ip")]?.try(&.as_s?)
+    end
+
     # Hostname effectif pour SSH.
     #
     # Ordre de résolution :
     #
-    #   1. `ssh_host:` explicite dans le YAML mergé. Prime sur tout.
+    #   0. Si transport global = `:overlay` ET `overlay_ip:` présent
+    #      → cette IP. Use case : tous les CLI beryl appelés avec
+    #      `--transport=overlay` parlent au host via le mesh Headscale,
+    #      avec un port 22 fermé en public (cf. recipe
+    #      `sshd-overlay-only`).
+    #   1. `ssh_host:` explicite dans le YAML mergé. Prime sur tout
+    #      le reste sauf l'overlay.
     #      Cas d'usage : test local (`ssh_host: 127.0.0.1`), VPN
     #      avec FQDN interne distinct du DNS public, alias DNS
     #      provider qu'on veut figer.
@@ -547,6 +561,9 @@ module Beryl::Config
     # YAML était silencieusement ignoré sauf pour OVH — incohérent et
     # bloquant pour tester en local.
     def ssh_host : String
+      if Beryl.use_overlay_transport? && (ip = overlay_ip)
+        return ip
+      end
       if explicit = @merged[YAML::Any.new("ssh_host")]?.try(&.as_s?)
         return explicit
       end
