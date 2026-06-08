@@ -125,6 +125,21 @@ factorisation à viser plutôt que de dupliquer `install-pkgbase.sh`.
   packages` dans `QemuInRescue` vers un driver pkgbase qui rend +
   exécute `install-pkgbase.sh` dans la VM mfsBSD. Valider en QEMU un
   boot FreeBSD 15 pkgbase mono-disque, root SSH OK.
++
+[NOTE]
+====
+*Avancement Phase 1.*
+
+* ✅ *Fait* — Bug `fingerprints` corrigé dans `install-pkgbase.sh`
+  (`/usr/share/keys/pkg` → `/usr/share/keys/pkgbase-${VERSION_MAJOR}`),
+  + spec de non-régression (`installer_spec`).
+* ⏳ *Reste* — Le câblage runtime (driver pkgbase dans `QemuInRescue`,
+  réutilisant la machinerie QEMU de `rescue-run-vm.sh` : on remplace les
+  étapes « fetch tarballs + bsdinstall » par « scp + run
+  install-pkgbase.sh »), lever le gate, puis *itération QEMU in vivo*
+  (comme le banc apply) pour trancher `pkg -c` vs `--rootdir` et la
+  présence des clés pkgbase dans mfsBSD. C'est l'effort lourd restant.
+====
 
 . *Phase 2 — parité base* +
   Factoriser la phase post-base (users/sudoers/packages/timezone)

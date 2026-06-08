@@ -80,6 +80,16 @@ describe Beryl::Bootstrap::Installer do
       script.should contain("DISK=")
       script.should contain("POOL=")
     end
+
+    it "configure le repo pkgbase avec les clés du base (pas celles des ports)" do
+      # Vérifié sur sources FreeBSD : le repo FreeBSD-base utilise
+      # /usr/share/keys/pkgbase-${VERSION_MAJOR}, et NON /usr/share/keys/pkg
+      # (qui sont les clés des PORTS). Cf. pkgbase-install-architecture.adoc.
+      script = make_installer.render_script
+      script.should contain("base_release_0")
+      script.should contain(%(fingerprints: "/usr/share/keys/pkgbase-${VERSION_MAJOR}"))
+      script.should_not contain(%(fingerprints: "/usr/share/keys/pkg"))
+    end
   end
 
   describe "#authorized_keys_base64" do

@@ -62,7 +62,12 @@ FreeBSD-base: {
   url: "pkg+https://pkg.freebsd.org/${ABI}/base_release_0",
   mirror_type: "srv",
   signature_type: "fingerprints",
-  fingerprints: "/usr/share/keys/pkg",
+  # Chemin officiel des clés pkgbase (cf. /etc/pkg/FreeBSD.conf livré
+  # dans 15.0-RELEASE). PAS `/usr/share/keys/pkg` (clés des PORTS, pas
+  # du base) — corrigé après vérif sources FreeBSD, cf.
+  # pkgbase-install-architecture.adoc. `${VERSION_MAJOR}` est expansé
+  # par pkg (→ `pkgbase-15`).
+  fingerprints: "/usr/share/keys/pkgbase-${VERSION_MAJOR}",
   enabled: yes
 }
 REPO
