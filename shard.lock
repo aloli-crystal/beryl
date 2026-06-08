@@ -12,9 +12,17 @@ shards:
     git: https://github.com/aloli-crystal/api-scaleway.git
     version: 0.5.3+git.commit.01e97460c022d0fd6c14208c48f564c7205a76c1
 
+  diceware:
+    git: https://github.com/aloli-crystal/diceware.git
+    version: 0.1.5
+
   load-env:
     git: https://github.com/aloli-crystal/load-env.git
     version: 0.2.1+git.commit.c1904589ee6a8bbe872e497cf7567f6090958579
+
+  secrets:
+    git: https://github.com/aloli-crystal/secrets.git
+    version: 0.5.0
 
   silex:
     git: https://github.com/aloli-crystal/silex.git
@@ -23,4 +31,8 @@ shards:
   ssh:
     git: https://github.com/aloli-crystal/ssh.git
     version: 0.2.2+git.commit.c60079d403ca2903004355dd1ce2ab3b48b94b00
+
+  toml:
+    git: https://github.com/aloli-crystal/toml.git
+    version: 0.1.4
 

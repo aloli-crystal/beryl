@@ -135,4 +135,110 @@ describe Beryl::Config::EnvFile do
       File.delete(path) rescue nil
     end
   end
+
+  describe ".parse_vault_toml" do
+    it "parse un coffre TOML à un seul provider" do
+      providers = Beryl::Config::EnvFile.parse_vault_toml(<<-TOML
+        [ovh]
+        OVH_APPLICATION_KEY = "aaa"
+        OVH_APPLICATION_SECRET = "bbb"
+        OVH_CONSUMER_KEY = "ccc"
+        TOML
+      )
+      providers.keys.should eq(["ovh"])
+      providers["ovh"]["OVH_APPLICATION_KEY"].should eq("aaa")
+      providers["ovh"]["OVH_APPLICATION_SECRET"].should eq("bbb")
+    end
+
+    it "parse plusieurs providers triés et sépare correctement" do
+      providers = Beryl::Config::EnvFile.parse_vault_toml(<<-TOML
+        [ovh]
+        OVH_APPLICATION_KEY = "aaa"
+
+        [scaleway]
+        SCW_SECRET_KEY = "xxx"
+
+        [dedibox]
+        DEDIBOX_TOKEN = "ddd"
+        TOML
+      )
+      providers.keys.sort.should eq(["dedibox", "ovh", "scaleway"])
+      providers["scaleway"]["SCW_SECRET_KEY"].should eq("xxx")
+      providers["dedibox"]["DEDIBOX_TOKEN"].should eq("ddd")
+    end
+
+    it "retourne un hash vide pour un TOML vide" do
+      Beryl::Config::EnvFile.parse_vault_toml("").should be_empty
+    end
+
+    it "ignore les non-strings (laisser passer un futur TOML plus riche sans crasher)" do
+      providers = Beryl::Config::EnvFile.parse_vault_toml(<<-TOML
+        [ovh]
+        OVH_APPLICATION_KEY = "ok"
+        SOME_INT = 42
+        TOML
+      )
+      providers["ovh"].keys.should eq(["OVH_APPLICATION_KEY"])
+      providers["ovh"]["OVH_APPLICATION_KEY"].should eq("ok")
+    end
+  end
+
+  describe ".serialize_account_to_toml" do
+    it "produit du TOML déterministe trié par provider puis par variable" do
+      providers = {
+        "scaleway" => {"SCW_SECRET_KEY" => "zzz"},
+        "ovh"      => {"OVH_CONSUMER_KEY" => "ccc", "OVH_APPLICATION_KEY" => "aaa"},
+      } of String => Hash(String, String)
+      toml = Beryl::Config::EnvFile.serialize_account_to_toml(providers)
+
+      # OVH avant Scaleway (alphabétique).
+      ovh_idx = toml.index!("[ovh]")
+      scw_idx = toml.index!("[scaleway]")
+      ovh_idx.should be < scw_idx
+
+      # APP_KEY avant CONSUMER_KEY dans [ovh].
+      app_idx = toml.index!("OVH_APPLICATION_KEY")
+      con_idx = toml.index!("OVH_CONSUMER_KEY")
+      app_idx.should be < con_idx
+    end
+
+    it "round-trip : parse(serialize(x)) == x pour des chaînes simples" do
+      providers = {
+        "ovh"      => {"OVH_APPLICATION_KEY" => "aaa", "OVH_APPLICATION_SECRET" => "bbb"},
+        "scaleway" => {"SCW_SECRET_KEY" => "xxx"},
+      } of String => Hash(String, String)
+      toml = Beryl::Config::EnvFile.serialize_account_to_toml(providers)
+      parsed = Beryl::Config::EnvFile.parse_vault_toml(toml)
+      parsed.should eq(providers)
+    end
+
+    it "échappe correctement les guillemets et antislashes" do
+      providers = {
+        "ovh" => {"WEIRD" => %(value with "quotes" and \\backslash)},
+      } of String => Hash(String, String)
+      toml = Beryl::Config::EnvFile.serialize_account_to_toml(providers)
+      parsed = Beryl::Config::EnvFile.parse_vault_toml(toml)
+      parsed["ovh"]["WEIRD"].should eq(%(value with "quotes" and \\backslash))
+    end
+  end
+
+  describe "#set_account / #clear_account" do
+    it "remplace en bloc une section société" do
+      env = Beryl::Config::EnvFile.new("/mock", Beryl::Config::EnvFile::Data.new)
+      env.set_account("aloli", {"ovh" => {"K" => "v"}} of String => Hash(String, String))
+      env.providers_for("aloli").should eq(["ovh"])
+
+      # set_account écrase complètement
+      env.set_account("aloli", {"scaleway" => {"K2" => "v2"}} of String => Hash(String, String))
+      env.providers_for("aloli").should eq(["scaleway"])
+    end
+
+    it "clear_account supprime toute trace de la société" do
+      env = Beryl::Config::EnvFile.new("/mock", Beryl::Config::EnvFile::Data.new)
+      env.set_account_provider("aloli", "ovh", {"K" => "v"})
+      env.set_account_provider("quimeo", "ovh", {"K" => "v"})
+      env.clear_account("aloli")
+      env.accounts.should eq(["quimeo"])
+    end
+  end
 end

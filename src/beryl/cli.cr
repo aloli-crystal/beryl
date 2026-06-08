@@ -17,6 +17,7 @@ require "./cli/unlock"
 require "./cli/reboot"
 require "./cli/status"
 require "./cli/tang_enroll"
+require "./cli/env"
 
 # Point d'entrée CLI de beryl.
 #
@@ -108,6 +109,7 @@ module Beryl::CLI
     when "reboot"             then Beryl::CLI::Reboot.run(config_root, sub_args)
     when "status"             then Beryl::CLI::Status.run(config_root, sub_args)
     when "tang-enroll"        then Beryl::CLI::TangEnroll.run(config_root, sub_args)
+    when "env"                then Beryl::CLI::Env.run(config_root, sub_args)
     when "version"            then puts "beryl #{Beryl::VERSION}"; 0
     else
       STDERR.puts "beryl : sous-commande inconnue : #{subcommand}"
@@ -139,6 +141,7 @@ module Beryl::CLI
     "rb" => "reboot",
     "st" => "status",
     "te" => "tang-enroll",
+    "e"  => "env",
     "v"  => "version",
   }
 
@@ -190,6 +193,7 @@ module Beryl::CLI
     when "reboot"         then Beryl::CLI::Reboot.run(config_root, ["--help"])
     when "status"         then Beryl::CLI::Status.run(config_root, ["--help"])
     when "tang-enroll"    then Beryl::CLI::TangEnroll.run(config_root, ["--help"])
+    when "env"            then Beryl::CLI::Env.run(config_root, ["--help"])
     when "version"
       puts "USAGE : beryl version"
       puts

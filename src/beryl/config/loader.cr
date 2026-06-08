@@ -47,6 +47,20 @@ module Beryl::Config
       env_file = EnvFile.load(File.join(expanded, ".env.yml"))
       accounts = load_accounts(expanded)
 
+      # Pour chaque société qui dispose d'un coffre chiffré
+      # `<société>/.env.toml.age`, on **remplace** la section
+      # homonyme du `.env.yml` racine par le contenu déchiffré du
+      # coffre. C'est le coffre qui fait autorité : la migration
+      # vers les coffres est progressive (cf. `beryl env migrate`)
+      # et tant qu'une société n'a pas migré, son fragment du
+      # `.env.yml` continue d'être lu sans changement.
+      accounts.each do |name, account|
+        vault_path = File.join(account.path, EnvFile::VAULT_FILENAME)
+        next unless File.exists?(vault_path)
+        providers = EnvFile.load_vault(vault_path)
+        env_file.set_account(name, providers)
+      end
+
       {defaults: defaults, accounts: accounts, env_file: env_file}
     end
 

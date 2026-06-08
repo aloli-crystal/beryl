@@ -9,6 +9,97 @@ et ce projet suit https://semver.org/lang/fr/[Semantic Versioning].
 
 == [Non publié]
 
+== 0.3.0 (13 mai 2026)
+
+=== `beryl env` — credentials chiffrés par société
+
+Les credentials providers (`OVH_APPLICATION_KEY`, `SCW_SECRET_KEY`,
+`DEDIBOX_TOKEN`...) vivaient dans `~/.config/beryl/.env.yml`, plat
+à la racine, en *clair*. Une fuite (backup non chiffré, sync iCloud
+mal configurée, `git add` malheureux) exposait toutes les clés de
+toutes les sociétés d'un seul coup.
+
+v0.3.0 introduit un *coffre chiffré par société*, à côté du dossier
+de chaque société :
+
+[source]
+----
+~/.config/beryl/
+├── _default.yml
+├── aloli/
+│   ├── _account.yml
+│   ├── .env.toml.age              ← coffre aloli, TOML chiffré age
+│   ├── aloli.fr.yml
+│   └── ...
+└── quimeo/
+    ├── .env.toml.age              ← coffre quimeo, indépendant
+    └── ...
+----
+
+Format plaintext du coffre (avant chiffrement, via
+`aloli-crystal/secrets`) :
+
+[source,toml]
+----
+[ovh]
+OVH_APPLICATION_KEY = "xxx"
+OVH_APPLICATION_SECRET = "yyy"
+OVH_CONSUMER_KEY = "zzz"
+
+[scaleway]
+SCW_SECRET_KEY = "abc"
+----
+
+==== Nouvelles sous-commandes
+
+* `beryl env migrate [--purge-yaml] [<société>...]` — convertit
+  `.env.yml[<société>]` en `<société>/.env.toml.age`. Refuse si le
+  coffre existe déjà (sauf `--force`). `--purge-yaml` supprime la
+  section migrée du fichier source après écriture du coffre. Sans
+  argument, migre toutes les sociétés présentes.
+* `beryl env edit [--create] <société>` — décrypte le coffre, lance
+  `$EDITOR` sur un tempfile mode 0600 (suffixe `.toml`), valide le
+  TOML, re-chiffre. Le coffre reste intact si l'éditeur sort
+  non-zéro ou si le TOML édité est invalide. `--create` permet de
+  partir d'un squelette vide.
+* `beryl env show <société>` — affiche le plaintext (debug local,
+  à éviter en production — préférez `beryl env edit`).
+
+Alias court : `beryl e`.
+
+==== Intégration loader
+
+`Beryl::Config::Loader.load` charge désormais, après le YAML racine,
+chaque `<société>/.env.toml.age` détecté. Le coffre *remplace* la
+section homonyme du `.env.yml` (le coffre fait autorité), ce qui
+permet une migration progressive — tant qu'une société n'a pas
+migré, son fragment du `.env.yml` continue d'être lu sans changement.
+
+==== Dépendance
+
+* Nouvelle dépendance : `aloli-crystal/secrets ~> 0.5` (utilise
+  `Secrets::Vault.encrypt/decrypt`, `Secrets::Editor.edit`,
+  `Secrets::Recipients.encryption_keys`, `Secrets::MasterKey.read`).
+* Pré-requis opérateur : `secrets init` une première fois sur le
+  poste (génère la master key + paper recovery).
+
+==== Multi-recipients (équipe)
+
+Le coffre est chiffré au roster `Secrets::Recipients.encryption_keys`,
+qui est aujourd'hui *global* (`~/.config/secrets/recipients.toml`).
+Un roster par société viendra quand le module amont acceptera un
+chemin override — vous pourrez alors limiter chaque coffre à
+l'équipe correspondante (la team `quimeo` n'aura pas la master key
+qui ouvre `aloli/.env.toml.age`).
+
+==== Tests
+
++9 examples sur les fonctions pures du chiffrement
+(`parse_vault_toml`, `serialize_account_to_toml`, round-trip,
+échappement, set/clear). Le test d'intégration `Loader` reste
+manuel — la constante `Secrets::CONFIG_DIR` est résolue à l'init
+du module et rend fragile un mocking de la master key au runtime.
+
 === `beryl apply` — moteur de recettes (Phase 1, PoC)
 
 Réécriture de `beryl apply` selon l'architecture à 2 niveaux du
