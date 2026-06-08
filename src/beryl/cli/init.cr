@@ -15,7 +15,9 @@ require "./add_domain"
 #   - `~/.config/beryl/<société>/_account.yml` (optionnel, métadonnées)
 #
 # Puis propose d'enchaîner sur `beryl add-provider` et `beryl add-domain`
-# pour configurer fournisseurs et domaines.
+# pour configurer les fournisseurs (hébergeur des serveurs et/ou
+# gestionnaire DNS — chez Aloli c'est OVH pour les deux) et les
+# domaines.
 #
 # Usage :
 #
@@ -34,8 +36,10 @@ module Beryl::CLI::Init
 
     parser = OptionParser.new do |p|
       p.banner = "USAGE : beryl init [<société>] [options]\n\n" \
-                 "Crée l'arborescence ~/.config/beryl/<société>/ et propose d'ajouter\n" \
-                 "fournisseurs et domaines.\n\n" \
+                 "Crée l'arborescence ~/.config/beryl/<société>/ et propose\n" \
+                 "d'ajouter ses fournisseurs (hébergeur de serveurs et/ou\n" \
+                 "gestionnaire DNS — chez Aloli c'est OVH pour les deux) et\n" \
+                 "ses domaines.\n\n" \
                  "Enchaînements possibles :\n" \
                  "  beryl add-provider <société>/<provider>\n" \
                  "  beryl add-domain   <société>/<domaine>"
@@ -114,13 +118,13 @@ module Beryl::CLI::Init
 
     # Étape 4 : chaîne vers add-provider si l'utilisateur veut
     unless non_interactive
-      if Beryl::CLI::AccountUtils.ask_yes_no("Ajouter un fournisseur maintenant ?", default_yes: true)
+      if Beryl::CLI::AccountUtils.ask_yes_no("Ajouter un fournisseur (serveurs et/ou DNS) maintenant ?", default_yes: true)
         return chain_add_providers(config_root, account)
       end
     end
 
     STDERR.puts "Prochaines étapes :"
-    STDERR.puts "  beryl add-provider #{account}/<provider>   # dedibox, ovh, scaleway, …"
+    STDERR.puts "  beryl add-provider #{account}/<provider>   # serveurs et/ou DNS : ovh, scaleway, dedibox, …"
     STDERR.puts "  beryl add-domain   #{account}/<domaine>    # aloli.net, …"
     EXIT_OK
   rescue ex : Beryl::CLI::AccountUtils::Aborted
@@ -142,9 +146,9 @@ module Beryl::CLI::Init
         break
       end
 
-      STDERR.puts "[beryl init] 1 Fournisseurs disponibles pour `#{account}` :"
+      STDERR.puts "[beryl init] 1 Fournisseurs disponibles pour `#{account}` (que fournit chacun) :"
       remaining.each_with_index do |p, i|
-        STDERR.puts "  #{i + 1}. #{p.name.ljust(12)} (#{p.display_name}) — capabilities : #{p.capabilities.map(&.to_s).sort.join(", ")}"
+        STDERR.puts "  #{i + 1}. #{p.name.ljust(12)} #{p.display_name.ljust(25)}  → #{capabilities_label(p.capabilities)}"
       end
 
       ans = Beryl::CLI::AccountUtils.ask("Lequel ajouter ? (nom, ou Entrée pour passer) :", "")
@@ -178,6 +182,24 @@ module Beryl::CLI::Init
     STDERR.puts
     STDERR.puts "[beryl init] 1 Configuration initiale de `#{account}` terminée."
     EXIT_OK
+  end
+
+  # Traduit la liste de capabilities en libellé français lisible pour
+  # l'utilisateur final. Évite le jargon `compute, dns` qui ne lève
+  # pas l'ambiguïté « fournisseur de quoi ? » côté opérateur.
+  #
+  #   [:compute, :dns] → "serveurs + DNS"
+  #   [:compute]       → "serveurs uniquement"
+  #   [:dns]           → "DNS uniquement"
+  private def self.capabilities_label(caps : Array(Symbol)) : String
+    parts = [] of String
+    parts << "serveurs" if caps.includes?(:compute)
+    parts << "DNS" if caps.includes?(:dns)
+    case parts.size
+    when 0 then "—"
+    when 1 then "#{parts.first} uniquement"
+    else        parts.join(" + ")
+    end
   end
 
   # Crée `_account.yml` avec un champ `name:` saisi par l'utilisateur
