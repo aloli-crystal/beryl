@@ -1,0 +1,178 @@
+= ADR-015 — Extensions typées pour les fichiers de configuration
+:toc: left
+:toc-title: Table des matières
+:toclevels: 3
+:source-highlighter: rouge
+:icons: font
+
+*Statut.* Accepté — précise ADR-014 (n'en change que le nommage des fichiers). +
+*Date.* 8 juin 2026. +
+*Auteur.* Philippe Nénert (Aloli).
+
+== Résumé
+
+Le type d'un élément de configuration beryl était *deviné par sa
+forme* : un fichier `<nom>.yml` dans un dossier de domaine = un host,
+un sous-dossier `<nom>/` = un groupe (configuré par un `<nom>.yml`
+voisin).
+
+L'arrivée de `beryl apply` (moteur de recettes, ADR à part) introduit
+un *dossier d'orchestration par host* : `<host>/` à côté de
+`<host>.yml`, contenant les recettes à appliquer. Cette forme est
+**identique** à celle d'un groupe (`<groupe>.yml` + `<groupe>/`). Le
+loader interprétait alors le dossier d'orchestration comme un groupe et
+**ignorait silencieusement le fichier host** — le host devenait
+« virtuel », `beryl apply <host>` ne trouvait plus sa cible.
+
+Décision : **typer chaque fichier de configuration par une double
+extension** (`.host.yml`, `.domain.yml`, `.group.yml`, `.recipe.yml`).
+Le type devient explicite dans le nom, la collision disparaît
+mécaniquement, et l'opérateur distingue host / recette / groupe d'un
+coup d'œil — y compris dans un dépôt git chiffré partagé.
+
+== Contexte
+
+=== La collision, découverte sur le banc QEMU
+
+Le bug a été trouvé par le banc d'intégration in vivo
+`qemu/test-apply.sh` (pas par les specs unitaires sur `FakeShell`, qui
+ne passent jamais par le loader). Sur une vraie VM FreeBSD, avec un
+dossier d'orchestration `clientvm/` à côté de `clientvm.yml` :
+
+[source]
+----
+aloli.net/
+├── clientvm.yml          ← config host
+└── clientvm/             ← recettes apply   ← MÊME FORME qu'un groupe
+    └── post-install.yml
+----
+
+`Beryl::Config::Loader.load` voyait `clientvm/` comme un groupe nommé
+`clientvm`, écartait `clientvm.yml` (règle « un fichier dont le nom
+correspond à un sous-dossier est la config du groupe »), et le host
+`clientvm` n'existait plus. `beryl apply clientvm` le résolvait en host
+*virtuel* (sans fichier) → « aucune recette ».
+
+=== Pourquoi la forme ne suffit plus
+
+`<nom>.yml` + `<nom>/` est intrinsèquement ambigu :
+
+* groupe : `<groupe>.yml` (config) + `<groupe>/<host>.yml` (membres) ;
+* host avec orchestration : `<host>.yml` (config) + `<host>/<recette>.yml`.
+
+Aucun signal de forme fiable ne les sépare. Une détection « par
+contenu » (le dossier contient-il des recettes ou des hosts ?) serait
+fragile et implicite.
+
+=== Contraintes supplémentaires
+
+* `~/.config/beryl/<société>/` est destiné à vivre dans un *dépôt git
+  partagé et chiffré* (cf. v0.3.0 `beryl env` + `aloli-crystal/secrets`).
+  L'opérateur doit pouvoir lire l'arborescence (`ls`, diff git) et
+  distinguer host / recette / groupe *au premier coup d'œil*.
+
+== Décision
+
+Chaque fichier de configuration porte une **double extension typée**,
+en gardant `.yml` final (coloration et validation YAML automatiques
+conservées dans les éditeurs, GitHub, outils) :
+
+[cols="2,3", options="header"]
+|===
+| Suffixe | Type
+
+| `*.domain.yml` | un domaine (zone DNS)
+| `*.host.yml`   | un host (direct, ou membre d'un groupe)
+| `*.group.yml`  | un groupe (ses membres vivent dans `<groupe>/`)
+| `*.recipe.yml` | une recette `beryl apply`
+|===
+
+Fichiers spéciaux *inchangés* (déjà non ambigus par leur préfixe) :
+`_default.yml`, `_account.yml`, `.env.yml`, `.env.toml.age` (coffre
+chiffré v0.3.0).
+
+=== Arborescence résultante
+
+[source]
+----
+~/.config/beryl/
+├── _default.yml
+└── aloli/                          ← société (dépôt git chiffré)
+    ├── _account.yml
+    ├── .env.toml.age               ← coffre credentials (intact)
+    ├── aloli.net.domain.yml        ← DOMAINE
+    └── aloli.net/
+        ├── quantas.host.yml        ← HOST          (d'un coup d'œil)
+        ├── quantas/                ← orchestration apply de quantas
+        │   ├── post-install.recipe.yml
+        │   └── ssh-hardening.recipe.yml
+        ├── web.group.yml           ← GROUPE
+        └── web/
+            ├── rails01.host.yml    ← host membre du groupe
+            └── rails02.host.yml
+----
+
+`quantas/` est l'orchestration de `quantas` *parce que son voisin est
+`quantas.host.yml`* ; `web/` est un groupe *parce que son voisin est
+`web.group.yml`*. Plus aucune devinette.
+
+=== Règles loader
+
+`load_domain_contents` est purement piloté par les suffixes (constantes
+`DOMAIN_SUFFIX` / `HOST_SUFFIX` / `GROUP_SUFFIX`) :
+
+* `*.host.yml` à la racine du domaine → host direct ;
+* `*.group.yml` → groupe ; ses membres = les `*.host.yml` de `<groupe>/` ;
+* tout le reste (dossiers d'orchestration `<host>/`, `*.recipe.yml`) est
+  ignoré par le loader (relève de `beryl apply`).
+
+Conséquence : **un groupe doit désormais être déclaré explicitement**
+par un `<groupe>.group.yml` (un sous-dossier nu n'est plus promu groupe).
+
+`beryl apply` dérive le dossier d'orchestration du `source_path` du
+host (`<host>.host.yml` → `<host>/`), ce qui reste correct pour un host
+en groupe (`<groupe>/<host>.host.yml` → `<groupe>/<host>/`).
+
+== Conséquences
+
+=== Code
+
+* `src/beryl/config/loader.cr` : scan par suffixes. Le bloc de
+  chargement des coffres chiffrés `<société>/.env.toml.age` (v0.3.0)
+  est *inchangé* — orthogonal.
+* `src/beryl/apply/recipe.cr` : nom de recette dérivé de
+  `<x>.recipe.yml` ; champ `recipe:` rendu facultatif.
+* `src/beryl/apply/resolver.cr` : lookup/scan en `*.recipe.yml`.
+* `src/beryl/cli/apply.cr` : orchestration dérivée du `source_path`.
+* `src/beryl/cli/scan.cr`, `add_domain.cr` : émettent les noms typés.
+
+=== Validation
+
+* Specs unitaires : fixtures config et recettes renommées ; 306 verts.
+* Banc QEMU in vivo (`qemu/test-apply.sh`) : host résolu, recettes
+  appliquées et idempotentes sur une vraie VM FreeBSD. Le banc a au
+  passage révélé un second bug réel (`pw show` → `pw usershow`).
+
+== Alternatives écartées
+
+*A — Détection par contenu* (un sous-dossier est une orchestration si
+ses `.yml` sont des recettes, sinon un groupe). Fonctionne mais
+implicite et fragile ; ne répond pas au besoin « lisible d'un coup
+d'œil ».
+
+*B — Suffixe `.d` (drop-in)* : orchestration dans `<host>.d/`. Non
+ambigu mais asymétrique (seule l'orchestration est typée) et diverge du
+modèle « tout le host porte le même nom de base ».
+
+*C — Orchestration hors du dossier domaine* (`_apply/<domaine>/<host>/`).
+Zéro collision mais éloigne le host de ses recettes.
+
+*D — Extension simple* (`.host`, `.recipe`). Plus court mais perd la
+coloration/validation YAML automatique (rattrapable via `.gitattributes`
++ config éditeur). Écarté au profit de la double extension.
+
+== Références
+
+* link:ADR-014-multi-account-architecture.adoc[ADR-014] — arborescence
+  multi-société (que cet ADR précise sur le nommage).
+* `qemu/test-apply.sh` — banc d'intégration qui a révélé la collision.
