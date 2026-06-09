@@ -171,43 +171,41 @@ describe Beryl::Bootstrap::QemuInRescue do
       make_bootstrap(install_type: "distribution_sets").install_type.should eq("distribution_sets")
     end
 
-    it "accepte install_type: packages — pkgbase câblé (Phase 2 : multi-disque + RAID + pools data)" do
+    it "accepte install_type: packages — pkgbase Phase 2 (parité : multi-disque, RAID, pools data, packages)" do
       make_bootstrap(install_type: "packages").install_type.should eq("packages")
-      # Multi-disque + RAID : désormais acceptés (Phase 2).
       make_bootstrap(install_type: "packages", disks: ["/dev/sda", "/dev/sdb"], raid: "mirror")
         .install_type.should eq("packages")
-      # Pools data : désormais acceptés (Phase 2).
       dp = Beryl::Bootstrap::DataPoolSpec.new(
         name: "zdata", raid: 0, disks: ["/dev/sdc", "/dev/sdd"], mountpoint: "/data")
       make_bootstrap(install_type: "packages", data_pools: [dp]).data_pools.size.should eq(1)
+      # Packages additionnels : désormais ACCEPTÉS (installés au bootstrap, parité tarball).
+      make_bootstrap(install_type: "packages", packages: ["sudo", "zsh"]).packages.should eq(["sudo", "zsh"])
     end
 
-    it "refuse pkgbase avec des packages ADDITIONNELS (à poser via beryl apply)" do
-      expect_raises(Beryl::Bootstrap::QemuInRescue::PkgbaseScopeUnsupported, /packages additionnels/) do
-        make_bootstrap(install_type: "packages", packages: ["sudo"])
-      end
-    end
-
-    it "rend install-pkgbase.sh multi-disque + pools data (placeholders substitués)" do
+    it "rend install-pkgbase.sh multi-disque + users + packages + root COUPÉ (placeholders substitués)" do
       dp = Beryl::Bootstrap::DataPoolSpec.new(
         name: "zdata", raid: 0, disks: ["/dev/sdc", "/dev/sdd"], mountpoint: "/data")
       sh = make_bootstrap(
         install_type: "packages", abi: "FreeBSD:15:amd64",
         disks: ["/dev/sda", "/dev/sdb"], raid: "mirror", data_pools: [dp],
+        packages: ["sudo", "zsh", "curl", "git"], sudoers: ["%wheel ALL=(ALL) NOPASSWD:ALL"],
       ).render_install_pkgbase
       # Plus aucun placeholder résiduel.
-      sh.should_not contain("__BOOT_DISKS__")
-      sh.should_not contain("__BOOT_RAID__")
-      sh.should_not contain("__DATA_POOLS_SCRIPT_B64__")
-      sh.should_not contain("__ABI__")
-      sh.should_not contain("__AUTHORIZED_KEYS_B64__")
-      # Boot multi-disque vtbd1+vtbd2, mode mirror.
+      %w[__BOOT_DISKS__ __BOOT_RAID__ __USERS_TSV_B64__ __PACKAGES__ __SUDOERS_B64__ __DATA_POOLS_SCRIPT_B64__ __ABI__].each do |ph|
+        sh.should_not contain(ph)
+      end
+      # Boot multi-disque mirror.
       sh.should contain("/dev/vtbd1 /dev/vtbd2")
       sh.should contain(%(BOOT_RAID="mirror"))
-      sh.should contain("FreeBSD:15:amd64")
+      # Packages installés au bootstrap.
+      sh.should contain(%(PACKAGES="sudo zsh curl git"))
+      # SÉCURITÉ : root SSH coupé d'emblée, aucun accès root.
+      sh.should contain("PermitRootLogin no")
+      sh.should_not contain("PermitRootLogin prohibit-password")
       # Le fix in vivo : clés du base, pas des ports.
       sh.should contain("/usr/share/keys/pkgbase-")
-      # Le snippet data pools (base64) est injecté, non vide.
+      # users TSV + data pools (base64) injectés, non vides.
+      sh.should_not contain(%(USERS_TSV_B64=""))
       sh.should_not contain(%(DATA_POOLS_SCRIPT_B64=""))
     end
 

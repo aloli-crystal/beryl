@@ -252,15 +252,12 @@ module Beryl::Bootstrap
           seen_disks << d
         end
       end
-      # pkgbase (install_type: packages) — Phase 2 : multi-disque + RAID
-      # (stripe/mirror/raidz…) + pools data sont désormais gérés par
-      # install-pkgbase.sh. Reste hors périmètre : les packages
-      # ADDITIONNELS au bootstrap (le base system suffit ; tout paquet
-      # supplémentaire se pose via `beryl apply` après — modèle Aloli).
-      # On REFUSE explicitement plutôt que d'ignorer en silence (règle Aloli).
-      if @install_type == "packages" && !@packages.empty?
-        raise PkgbaseScopeUnsupported.new("install_type: packages ne pose pas de packages additionnels au bootstrap (#{@packages.join(", ")}). Posez-les via `beryl apply` après bootstrap.")
-      end
+      # pkgbase (install_type: packages) — Phase 2 : PARITÉ COMPLÈTE avec
+      # tarball. install-pkgbase.sh gère multi-disque + RAID + pools data,
+      # crée les users (groupes + clés + sudo), installe les packages, et
+      # COUPE le SSH root d'emblée (PermitRootLogin no — exigence sécurité
+      # Aloli : aucun accès root, même transitoire). Plus aucune
+      # restriction de périmètre.
       @users.each(&.validate!)
 
       @mfsbsd_url = iso_url || self.class.default_mfsbsd_url(@mfsbsd_version)
@@ -395,15 +392,26 @@ module Beryl::Bootstrap
         .gsub("__ABI__", @abi)
         .gsub("__SWAP_GB__", @swap_gb.to_s)
         .gsub("__TIMEZONE__", @timezone)
-        .gsub("__AUTHORIZED_KEYS_B64__", pkgbase_root_keys_b64)
+        .gsub("__USERS_TSV_B64__", pkgbase_users_tsv_b64)
+        .gsub("__PACKAGES__", @packages.join(" "))
+        .gsub("__SUDOERS_B64__", pkgbase_sudoers_b64)
         .gsub("__DATA_POOLS_SCRIPT_B64__", data_pools_script_b64)
     end
 
-    # Union des clés SSH des users, encodée base64 pour /root/.ssh/
-    # authorized_keys (accès root post-install en Phase 1 pkgbase).
-    private def pkgbase_root_keys_b64 : String
-      keys = @users.flat_map(&.ssh_keys).uniq
-      Base64.strict_encode(keys.join("\n") + "\n")
+    # Users encodés en TSV (name|pgroup|sgroups|shell|key1,key2 par ligne),
+    # base64 pour éviter tout souci de quoting des clés. install-pkgbase.sh
+    # crée chaque user (groupes + clés + sudo) au bootstrap — AUCUN accès
+    # root SSH n'est posé (PermitRootLogin no) : l'accès passe uniquement
+    # par les users + sudo (exigence sécurité Aloli).
+    private def pkgbase_users_tsv_b64 : String
+      Base64.strict_encode(@users.map(&.to_tsv).join("\n") + "\n")
+    end
+
+    # Contenu sudoers (ex. "%wheel ALL=(ALL) NOPASSWD:ALL"), base64. Vide
+    # si aucun (install-pkgbase.sh saute alors le bloc).
+    private def pkgbase_sudoers_b64 : String
+      return "" if @sudoers.empty?
+      Base64.strict_encode(@sudoers.join("\n") + "\n")
     end
 
     # Ordre global des disques passés à QEMU : boot d'abord, puis pools

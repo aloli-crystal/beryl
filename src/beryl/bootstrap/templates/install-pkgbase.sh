@@ -27,7 +27,9 @@ HOSTNAME="__HOSTNAME__"
 ABI="__ABI__"
 SWAP_GB="__SWAP_GB__"
 TIMEZONE="__TIMEZONE__"
-AUTHORIZED_KEYS_B64="__AUTHORIZED_KEYS_B64__"
+USERS_TSV_B64="__USERS_TSV_B64__"
+PACKAGES="__PACKAGES__"
+SUDOERS_B64="__SUDOERS_B64__"
 DATA_POOLS_SCRIPT_B64="__DATA_POOLS_SCRIPT_B64__"
 
 echo "==> [beryl] Disques boot : ${BOOT_DISKS} (RAID ${BOOT_RAID})"
@@ -158,16 +160,79 @@ RC
 echo "==> [beryl] Fuseau horaire ${TIMEZONE}"
 cp "/usr/share/zoneinfo/${TIMEZONE}" /mnt/etc/localtime
 
-echo "==> [beryl] Clés SSH autorisées pour root"
-mkdir -p /mnt/root/.ssh
-chmod 700 /mnt/root/.ssh
-printf '%s' "${AUTHORIZED_KEYS_B64}" | b64decode -r > /mnt/root/.ssh/authorized_keys
-chmod 600 /mnt/root/.ssh/authorized_keys
+echo "==> [beryl] Installation des paquets (${PACKAGES:-aucun})"
+if [ -n "${PACKAGES}" ]; then
+  # Le repo pkg par défaut (sudo/zsh/curl/git…) signe par fingerprints
+  # dans /usr/share/keys/pkg ; avec --rootdir, pkg le cherche sous /mnt.
+  # On copie depuis l'hôte d'install si la cible ne l'a pas encore (même
+  # logique que les clés pkgbase plus haut).
+  [ -d /mnt/usr/share/keys/pkg ] || cp -R /usr/share/keys/pkg /mnt/usr/share/keys/ 2>/dev/null || true
+  # Hors chroot (--rootdir) → pas de bug Capsicum signal 12. ABI explicite
+  # pour cohérence hôte d'install / cible (même release).
+  # shellcheck disable=SC2086
+  env ABI="${ABI}" pkg --rootdir /mnt install -y ${PACKAGES}
+fi
 
-echo "==> [beryl] Durcissement SSH initial (beryl apply renforcera)"
+echo "==> [beryl] Création des utilisateurs (zéro accès root : admin + sudo)"
+# USERS_TSV format : name|primary_group|secondary_groups|shell|key1,key2
+# (un user par ligne ; groupes séparés par des virgules). Les shells
+# (ex. /usr/local/bin/zsh) existent maintenant que les paquets sont posés.
+USERS_TSV=$(printf '%s' "${USERS_TSV_B64}" | b64decode -r)
+printf '%s\n' "${USERS_TSV}" | while IFS='|' read -r UNAME PGROUP SGROUPS USHELL UKEYS; do
+  [ -z "${UNAME}" ] && continue
+  echo "    - ${UNAME} (g=${PGROUP}, G=${SGROUPS}, shell=${USHELL})"
+  pw -R /mnt groupshow "${PGROUP}" 2>/dev/null || pw -R /mnt groupadd "${PGROUP}"
+  if [ -n "${SGROUPS}" ]; then
+    echo "${SGROUPS}" | tr ',' '\n' | while read -r SG; do
+      [ -z "${SG}" ] && continue
+      pw -R /mnt groupshow "${SG}" 2>/dev/null || pw -R /mnt groupadd "${SG}"
+    done
+  fi
+  GFLAG=""
+  [ -n "${SGROUPS}" ] && GFLAG="-G ${SGROUPS}"
+  # shellcheck disable=SC2086
+  pw -R /mnt useradd -n "${UNAME}" -d "/home/${UNAME}" -g "${PGROUP}" ${GFLAG} -m -s "${USHELL}"
+  if [ -n "${UKEYS}" ]; then
+    mkdir -p "/mnt/home/${UNAME}/.ssh"
+    echo "${UKEYS}" | tr ',' '\n' | while read -r K; do
+      [ -z "${K}" ] && continue
+      echo "${K}" >> "/mnt/home/${UNAME}/.ssh/authorized_keys"
+    done
+    UID_NEW=$(pw -R /mnt usershow "${UNAME}" | cut -d: -f3)
+    GID_PG=$(pw -R /mnt groupshow "${PGROUP}" | cut -d: -f3)
+    chown -R "${UID_NEW}:${GID_PG}" "/mnt/home/${UNAME}/.ssh"
+    chmod 700 "/mnt/home/${UNAME}/.ssh"
+    chmod 600 "/mnt/home/${UNAME}/.ssh/authorized_keys"
+  fi
+done
+
+echo "==> [beryl] Garde anti-lock-out : au moins un user avec clé SSH"
+# CRITIQUE : root SSH est coupé (PermitRootLogin no). Si AUCUN user n'a
+# de authorized_keys non vide, le serveur serait inaccessible au reboot.
+# On préfère ÉCHOUER l'install (récupérable depuis le rescue) plutôt que
+# de livrer un serveur verrouillé. (Bug « admin sans clé SSH » constaté
+# terrain — d'où cette vérif explicite.)
+NB_KEYED=0
+for AK in /mnt/home/*/.ssh/authorized_keys; do
+  [ -s "${AK}" ] && NB_KEYED=$((NB_KEYED + 1))
+done
+if [ "${NB_KEYED}" -eq 0 ]; then
+  echo "ERREUR [beryl] : aucun utilisateur n'a de clé SSH et root est coupé → abandon (serveur sinon verrouillé)." >&2
+  exit 1
+fi
+echo "    ${NB_KEYED} utilisateur(s) avec clé SSH — OK"
+
+echo "==> [beryl] sudoers.d/beryl"
+if [ -n "${SUDOERS_B64}" ]; then
+  mkdir -p /mnt/usr/local/etc/sudoers.d
+  printf '%s' "${SUDOERS_B64}" | b64decode -r > /mnt/usr/local/etc/sudoers.d/beryl
+  chmod 440 /mnt/usr/local/etc/sudoers.d/beryl
+fi
+
+echo "==> [beryl] SSH : ROOT COUPÉ d'emblée (accès uniquement par user + sudo)"
 mkdir -p /mnt/etc/ssh/sshd_config.d
 cat > /mnt/etc/ssh/sshd_config.d/10-beryl-bootstrap.conf <<'SSHD'
-PermitRootLogin prohibit-password
+PermitRootLogin no
 PasswordAuthentication no
 ChallengeResponseAuthentication no
 SSHD
