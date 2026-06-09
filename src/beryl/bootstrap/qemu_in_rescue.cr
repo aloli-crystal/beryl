@@ -319,7 +319,8 @@ module Beryl::Bootstrap
       # (~90 s), l'opérateur n'a pas le temps d'ouvrir un second
       # terminal. À garder pour debug nouveau provider ou flow
       # FreeBSD inhabituel.
-      log_step("7.5 QEMU + mfsBSD + bsdinstall + post-install no-chroot (typiquement 1-3 min)") do
+      install_label = @install_type == "packages" ? "pkgbase (FreeBSD-* via pkg --rootdir)" : "bsdinstall + tarballs"
+      log_step("7.5 QEMU + mfsBSD : install #{install_label} + post-install no-chroot (typiquement 1-3 min)") do
         @rescue_conn.exec("bash #{Process.quote(RESCUE_RUN_VM_PATH)}")
       end
       # Étape 6/6 : on sort du `log_step` animé car `wait_for_installed_ssh`

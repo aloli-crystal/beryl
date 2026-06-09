@@ -38,12 +38,18 @@ echo "==> [beryl] Partitionnement de chaque disque boot"
 i=0
 ZFS_LABELS=""
 for DISK in ${BOOT_DISKS}; do
-  echo "    - ${DISK} : destruction GPT + création EFI/swap/ZFS (index ${i})"
+  echo "    - ${DISK} : destruction GPT + création boot/EFI/swap/ZFS (index ${i})"
   gpart destroy -F "${DISK}" 2>/dev/null || true
   dd if=/dev/zero of="${DISK}" bs=1M count=10 2>/dev/null || true
   gpart create -s gpt "${DISK}"
 
   # Labels indexés : uniques par disque (gpt labels DOIVENT être uniques).
+  # PARTITION 1 = freebsd-boot (gptzfsboot/BIOS) : CRITIQUE. OVH amorce
+  # les disques en CSM/legacy → sans cette amorce BIOS, le serveur ne
+  # boote PAS, même avec l'EFI parfait (constaté qgra/qsbg : pkgbase
+  # UEFI-only ne bootait pas, alors que le tarball — qui a freebsd-boot
+  # en p1, d'où zroot en p4 — bootait). On fait comme bsdinstall.
+  gpart add -t freebsd-boot -s 512k             -l "boot${i}" "${DISK}"
   gpart add -t efi          -s 200M       -a 1M -l "efi${i}"  "${DISK}"
   newfs_msdos -F 32 -c 1 "/dev/gpt/efi${i}"
   gpart add -t freebsd-swap -s "${SWAP_GB}G" -a 1M -l "swap${i}" "${DISK}"
@@ -284,6 +290,18 @@ while [ "${k}" -lt "${NB_BOOT_DISKS}" ]; do
   cp /mnt/boot/loader.efi "${EFI_MNT}/EFI/FreeBSD/loader.efi"
   [ "${k}" -ne 0 ] && umount "${EFI_MNT}"
   k=$((k + 1))
+done
+
+echo "==> [beryl] Amorce BIOS/legacy (gptzfsboot) sur CHAQUE disque boot"
+# pmbr (MBR de protection) + gptzfsboot (amorce ZFS BIOS) dans la
+# partition freebsd-boot (index 1). INDISPENSABLE : OVH amorce les
+# disques en CSM/legacy → sans ça, pas de boot même avec l'EFI parfait
+# (constaté in vivo). Fichiers depuis la cible (/mnt/boot, posés par
+# FreeBSD-bootloader) → version alignée sur le FreeBSD installé.
+# shellcheck disable=SC2086
+for DISK in ${BOOT_DISKS}; do
+  gpart bootcode -b /mnt/boot/pmbr -p /mnt/boot/gptzfsboot -i 1 "${DISK}"
+  echo "    - ${DISK} : gptzfsboot écrit (freebsd-boot p1)"
 done
 
 echo "==> [beryl] Verrouillage du dataset racine"
