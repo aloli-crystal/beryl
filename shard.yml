@@ -14,8 +14,11 @@ crystal: ">= 1.19.1"
 license: MIT
 
 dependencies:
-  silex:
-    github: aloli-crystal/silex
+  api-dedibox:
+    github: aloli-crystal/api-dedibox
+    branch: production
+  api-gandi:
+    github: aloli-crystal/api-gandi
     branch: production
   api-ovh:
     github: aloli-crystal/api-ovh
@@ -23,21 +26,18 @@ dependencies:
   api-scaleway:
     github: aloli-crystal/api-scaleway
     branch: production
-  api-dedibox:
-    github: aloli-crystal/api-dedibox
-    branch: production
-  api-gandi:
-    github: aloli-crystal/api-gandi
-    branch: production
   load-env:
     github: aloli-crystal/load-env
-    branch: production
-  ssh:
-    github: aloli-crystal/ssh
     branch: production
   secrets:
     github: aloli-crystal/secrets
     version: "~> 0.5"
+  silex:
+    github: aloli-crystal/silex
+    branch: production
+  ssh:
+    github: aloli-crystal/ssh
+    branch: production
 
 targets:
   beryl:
