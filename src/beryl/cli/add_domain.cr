@@ -149,6 +149,11 @@ module Beryl::CLI::AddDomain
     File.write(domain_yml, content)
     STDERR.puts "[beryl add-domain] 3 #{domain_yml} créé."
     STDERR.puts
+    STDERR.puts "Récapitulatif #{domain_name} :"
+    STDERR.puts "  - zone DNS gérée par : #{dns_provider}"
+    STDERR.puts "  - hébergeur des serveurs (défaut) : #{compute_provider}"
+    STDERR.puts "  (les deux rôles sont distincts — DNS chez l'un, serveurs chez l'autre)"
+    STDERR.puts
     STDERR.puts "Prochaines étapes :"
     STDERR.puts "  beryl rescue <host> --account=#{account} --domain=#{domain_name}"
     STDERR.puts "  beryl scan <host> --account=#{account} --domain=#{domain_name} --dns --write"
@@ -172,7 +177,7 @@ module Beryl::CLI::AddDomain
       STDERR.puts "        Aucun n'a la capability :dns dans ce build."
       nil
     when 1
-      STDERR.puts "[beryl add-domain] 3 DNS provider (auto) : #{dns_capable.first}"
+      STDERR.puts "[beryl add-domain] 3 Gestionnaire DNS de la zone (auto) : #{dns_capable.first}"
       dns_capable.first
     else
       return dns_capable.first if non_interactive
@@ -193,7 +198,7 @@ module Beryl::CLI::AddDomain
     return nil if compute_capable.empty?
     # S'il y a un seul compute-capable, auto.
     if compute_capable.size == 1
-      STDERR.puts "[beryl add-domain] 3 Compute provider (auto) : #{compute_capable.first}"
+      STDERR.puts "[beryl add-domain] 3 Hébergeur des serveurs (auto) : #{compute_capable.first}"
       return compute_capable.first
     end
     # Plusieurs : propose le dns_provider en défaut si lui aussi compute-capable
