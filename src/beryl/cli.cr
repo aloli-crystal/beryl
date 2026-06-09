@@ -83,7 +83,15 @@ module Beryl::CLI
         puts p
         exit(0)
       end
-      p.on("-v", "--version", "Affiche la version de beryl") do
+      # Convention Aloli (feedback_cli_short_flags) : la version est
+      # `-V` (majuscule) / `--version`, `-v` minuscule restant réservé
+      # à « verbose ». On garde `-v` comme alias de compat (beryl
+      # l'utilisait historiquement) pour ne casser personne.
+      p.on("-V", "--version", "Affiche la version de beryl") do
+        puts "beryl #{Beryl::VERSION}"
+        exit(0)
+      end
+      p.on("-v", "Alias de -V (version)") do
         puts "beryl #{Beryl::VERSION}"
         exit(0)
       end
