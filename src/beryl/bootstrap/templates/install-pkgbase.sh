@@ -4,42 +4,70 @@
 # Exécuté à l'intérieur d'une image mfsBSD tournant en RAM.
 # Les placeholders __XXX__ sont remplacés par beryl avant upload.
 #
-# ATTENTION : ce script est DESTRUCTIF. Il détruit tout ce qui est sur le disque
-# désigné par __TARGET_DISK__.
+# ATTENTION : ce script est DESTRUCTIF. Il détruit tout ce qui est sur
+# TOUS les disques de __BOOT_DISKS__ (pool système) et les disques des
+# pools data (cf. __DATA_POOLS_SCRIPT_B64__).
+#
+# Multi-disque (Phase 2) :
+#   - pool boot sur N disques selon __BOOT_RAID__ (stripe/mirror/raidz…) ;
+#     chaque disque est partitionné (EFI + swap + ZFS) avec des labels
+#     indexés (efi0/efi1…, swap0/swap1…, zfs0/zfs1…) ;
+#   - le bootloader EFI est posé sur CHAQUE disque boot (le serveur
+#     démarre même si le firmware choisit un autre disque, ou si le
+#     premier disque tombe) ;
+#   - les pools data sont créés après le base system via un snippet
+#     généré par beryl (références /dev/vtbd* directes, disques entiers).
 
 set -eu
 
-DISK="__TARGET_DISK__"
+BOOT_DISKS="__BOOT_DISKS__"
+BOOT_RAID="__BOOT_RAID__"
 POOL="__POOL_NAME__"
 HOSTNAME="__HOSTNAME__"
 ABI="__ABI__"
 SWAP_GB="__SWAP_GB__"
 TIMEZONE="__TIMEZONE__"
 AUTHORIZED_KEYS_B64="__AUTHORIZED_KEYS_B64__"
+DATA_POOLS_SCRIPT_B64="__DATA_POOLS_SCRIPT_B64__"
 
-echo "==> [beryl] Destruction des tables de partition existantes sur ${DISK}"
-gpart destroy -F "${DISK}" 2>/dev/null || true
-dd if=/dev/zero of="${DISK}" bs=1M count=10 2>/dev/null || true
+echo "==> [beryl] Disques boot : ${BOOT_DISKS} (RAID ${BOOT_RAID})"
 
-echo "==> [beryl] Création du schéma GPT"
-gpart create -s gpt "${DISK}"
+echo "==> [beryl] Partitionnement de chaque disque boot"
+i=0
+ZFS_LABELS=""
+for DISK in ${BOOT_DISKS}; do
+  echo "    - ${DISK} : destruction GPT + création EFI/swap/ZFS (index ${i})"
+  gpart destroy -F "${DISK}" 2>/dev/null || true
+  dd if=/dev/zero of="${DISK}" bs=1M count=10 2>/dev/null || true
+  gpart create -s gpt "${DISK}"
 
-echo "==> [beryl] Partition EFI (200 Mo)"
-gpart add -t efi -s 200M -a 1M -l efi "${DISK}"
-newfs_msdos -F 32 -c 1 "/dev/gpt/efi"
+  # Labels indexés : uniques par disque (gpt labels DOIVENT être uniques).
+  gpart add -t efi          -s 200M       -a 1M -l "efi${i}"  "${DISK}"
+  newfs_msdos -F 32 -c 1 "/dev/gpt/efi${i}"
+  gpart add -t freebsd-swap -s "${SWAP_GB}G" -a 1M -l "swap${i}" "${DISK}"
+  gpart add -t freebsd-zfs               -a 1M -l "zfs${i}"  "${DISK}"
 
-echo "==> [beryl] Partition swap (${SWAP_GB} Go)"
-gpart add -t freebsd-swap -s "${SWAP_GB}G" -a 1M -l swap "${DISK}"
+  ZFS_LABELS="${ZFS_LABELS} /dev/gpt/zfs${i}"
+  i=$((i + 1))
+done
+NB_BOOT_DISKS=${i}
 
-echo "==> [beryl] Partition ZFS (reste du disque)"
-gpart add -t freebsd-zfs -a 1M -l zfs "${DISK}"
+# Construction du vdev du pool boot selon le mode RAID. `stripe` = pas de
+# mot-clé (concaténation implicite des labels). Les autres modes
+# (mirror/raidz/raidz2/raidz3) préfixent le mot-clé ZFS. RAID 10
+# (mirror_stripe) est refusé en amont par beryl pour le pool boot.
+case "${BOOT_RAID}" in
+  stripe) BOOT_VDEV="${ZFS_LABELS}" ;;
+  *)      BOOT_VDEV="${BOOT_RAID} ${ZFS_LABELS}" ;;
+esac
 
-echo "==> [beryl] Création du pool ZFS ${POOL}"
+echo "==> [beryl] Création du pool ZFS ${POOL} (vdev :${BOOT_VDEV})"
+# shellcheck disable=SC2086
 zpool create -f \
   -O canmount=off -O mountpoint=none \
   -O compression=lz4 -O atime=off \
   -R /mnt \
-  "${POOL}" /dev/gpt/zfs
+  "${POOL}" ${BOOT_VDEV}
 
 echo "==> [beryl] Datasets ZFS"
 zfs create -o mountpoint=none "${POOL}/ROOT"
@@ -51,9 +79,9 @@ chmod 1777 /mnt/tmp
 
 zpool set bootfs="${POOL}/ROOT/default" "${POOL}"
 
-echo "==> [beryl] Monte EFI"
+echo "==> [beryl] Monte l'EFI du premier disque (efi0) pour l'install"
 mkdir -p /mnt/boot/efi
-mount -t msdosfs /dev/gpt/efi /mnt/boot/efi
+mount -t msdosfs /dev/gpt/efi0 /mnt/boot/efi
 
 echo "==> [beryl] Repo FreeBSD-base côté hôte d'install (mfsBSD)"
 # On installe le base system dans /mnt via `pkg --rootdir` (no-chroot,
@@ -103,11 +131,15 @@ zfs_load="YES"
 opensolaris_load="YES"
 LOADER
 
-echo "==> [beryl] Configuration /etc/fstab"
-cat > /mnt/etc/fstab <<'FSTAB'
-/dev/gpt/efi   /boot/efi  msdosfs  rw,late   2  2
-/dev/gpt/swap  none       swap     sw        0  0
-FSTAB
+echo "==> [beryl] Configuration /etc/fstab (EFI premier disque + tous les swaps)"
+{
+  echo "/dev/gpt/efi0   /boot/efi  msdosfs  rw,late   2  2"
+  j=0
+  while [ "${j}" -lt "${NB_BOOT_DISKS}" ]; do
+    echo "/dev/gpt/swap${j}  none       swap     sw        0  0"
+    j=$((j + 1))
+  done
+} > /mnt/etc/fstab
 
 echo "==> [beryl] Configuration /etc/rc.conf"
 cat > /mnt/etc/rc.conf <<RC
@@ -140,7 +172,7 @@ PasswordAuthentication no
 ChallengeResponseAuthentication no
 SSHD
 
-echo "==> [beryl] Installation du bootloader EFI"
+echo "==> [beryl] Installation du bootloader EFI sur CHAQUE disque boot"
 # Nom du fallback EFI selon l'architecture (BOOTX64 sur amd64,
 # BOOTAA64 sur arm64) — sinon le firmware UEFI ne trouve pas le
 # loader. Validé sur le banc QEMU aarch64.
@@ -149,16 +181,49 @@ case "$(uname -m)" in
   arm64 | aarch64) EFI_FALLBACK="BOOTAA64.EFI" ;;
   *) EFI_FALLBACK="BOOTX64.EFI" ;;
 esac
-mkdir -p /mnt/boot/efi/EFI/FreeBSD /mnt/boot/efi/EFI/BOOT
-cp /mnt/boot/loader.efi "/mnt/boot/efi/EFI/BOOT/${EFI_FALLBACK}"
-cp /mnt/boot/loader.efi /mnt/boot/efi/EFI/FreeBSD/loader.efi
+# efi0 est déjà monté sur /mnt/boot/efi. Pour les autres disques, on
+# monte temporairement leur partition EFI et on y copie le même loader,
+# de sorte que le serveur boote quel que soit le disque choisi par le
+# firmware (et survive à la perte du premier disque dans un mirror).
+k=0
+while [ "${k}" -lt "${NB_BOOT_DISKS}" ]; do
+  if [ "${k}" -eq 0 ]; then
+    EFI_MNT="/mnt/boot/efi"
+  else
+    EFI_MNT="/tmp/efi${k}"
+    mkdir -p "${EFI_MNT}"
+    mount -t msdosfs "/dev/gpt/efi${k}" "${EFI_MNT}"
+  fi
+  mkdir -p "${EFI_MNT}/EFI/FreeBSD" "${EFI_MNT}/EFI/BOOT"
+  cp /mnt/boot/loader.efi "${EFI_MNT}/EFI/BOOT/${EFI_FALLBACK}"
+  cp /mnt/boot/loader.efi "${EFI_MNT}/EFI/FreeBSD/loader.efi"
+  [ "${k}" -ne 0 ] && umount "${EFI_MNT}"
+  k=$((k + 1))
+done
 
 echo "==> [beryl] Verrouillage du dataset racine"
 zfs set canmount=noauto "${POOL}/ROOT/default"
 
-echo "==> [beryl] Démontage et export du pool"
-umount /mnt/boot/efi
+# Pools data : créés MAINTENANT (depuis mfsBSD) sur disques entiers, avec
+# -R /mnt pour que leur cache atterrisse dans /mnt/boot/zfs/zpool.cache et
+# qu'ils soient ré-importés au boot (zfs_enable=YES). Snippet vide si
+# aucun pool data déclaré.
+DATA_POOLS_SCRIPT=$(printf '%s' "${DATA_POOLS_SCRIPT_B64}" | b64decode -r)
+if [ -n "${DATA_POOLS_SCRIPT}" ]; then
+  echo "==> [beryl] Création des pools data"
+  # shellcheck disable=SC1090
+  eval "${DATA_POOLS_SCRIPT}"
+fi
+
+echo "==> [beryl] Démontage et export du pool boot"
+umount /mnt/boot/efi 2>/dev/null || true
 zfs umount -a 2>/dev/null || true
+# On n'exporte QUE le pool boot. Les pools data NON chiffrés restent
+# importés avec leur cachefile pointant vers /mnt/boot/zfs/zpool.cache :
+# au reboot, zfs_enable=YES les ré-importe depuis ce cache. Les exporter
+# ici les retirerait du cache → import manuel requis (bug constaté
+# terrain quantas, cf. data_pools_script). Les pools data CHIFFRÉS ont
+# déjà été exportés par le snippet (clé non chargée → import via beryl unlock).
 zpool export "${POOL}"
 
 echo "==> [beryl] Installation terminée. Redémarrage requis."

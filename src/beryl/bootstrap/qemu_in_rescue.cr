@@ -252,16 +252,14 @@ module Beryl::Bootstrap
           seen_disks << d
         end
       end
-      # pkgbase (install_type: packages) — Phase 1 : mono-disque,
-      # root-only (le script install-pkgbase.sh ne couvre pas encore
-      # RAID, pools data, packages additionnels ni users non-root).
-      # On REFUSE explicitement ces cas plutôt que de les ignorer en
-      # silence (règle Aloli). Voir pkgbase-install-architecture.adoc.
-      if @install_type == "packages"
-        raise PkgbaseScopeUnsupported.new("install_type: packages — Phase 1 ne gère qu'un seul disque (reçu #{@disks.size}).") if @disks.size > 1
-        raise PkgbaseScopeUnsupported.new("install_type: packages — Phase 1 ne gère pas les pools data.") unless @data_pools.empty?
-        raise PkgbaseScopeUnsupported.new("install_type: packages — Phase 1 ne gère pas le RAID (utilisez raid: stripe).") unless @raid == "stripe"
-        raise PkgbaseScopeUnsupported.new("install_type: packages — Phase 1 ne gère pas les packages additionnels (#{@packages.join(", ")}). Posez-les via beryl apply après bootstrap.") unless @packages.empty?
+      # pkgbase (install_type: packages) — Phase 2 : multi-disque + RAID
+      # (stripe/mirror/raidz…) + pools data sont désormais gérés par
+      # install-pkgbase.sh. Reste hors périmètre : les packages
+      # ADDITIONNELS au bootstrap (le base system suffit ; tout paquet
+      # supplémentaire se pose via `beryl apply` après — modèle Aloli).
+      # On REFUSE explicitement plutôt que d'ignorer en silence (règle Aloli).
+      if @install_type == "packages" && !@packages.empty?
+        raise PkgbaseScopeUnsupported.new("install_type: packages ne pose pas de packages additionnels au bootstrap (#{@packages.join(", ")}). Posez-les via `beryl apply` après bootstrap.")
       end
       @users.each(&.validate!)
 
@@ -381,19 +379,24 @@ module Beryl::Bootstrap
         .gsub("__INSTALL_PKGBASE_PATH__", INSTALL_PKGBASE_PATH)
     end
 
-    # Rend le script d'install pkgbase (autonome). La cible est
-    # /dev/vtbd1 dans la VM QEMU (vtbd0 = mfsBSD, le disque cible est le
-    # premier disque passthrough). Phase 1 : mono-disque, clés root =
-    # union des clés SSH des users déclarés.
+    # Rend le script d'install pkgbase (autonome). Multi-disque (Phase 2) :
+    # le pool boot s'étend sur vtbd1..vtbd(N) (N = @disks.size ; vtbd0 =
+    # mfsBSD), assemblés selon @raid (stripe/mirror/raidz…). Les pools
+    # data (vtbd(N+1)..) sont créés via le même `data_pools_script` que le
+    # chemin tarball (mapping vtbd, cachefile, chiffrement réutilisés).
+    # Clés root = union des clés SSH des users déclarés.
     def render_install_pkgbase : String
+      boot_disks = (1..@disks.size).map { |i| "/dev/vtbd#{i}" }.join(" ")
       TEMPLATE_INSTALL_PKGBASE
-        .gsub("__TARGET_DISK__", "/dev/vtbd1")
+        .gsub("__BOOT_DISKS__", boot_disks)
+        .gsub("__BOOT_RAID__", @raid)
         .gsub("__POOL_NAME__", @pool_name)
         .gsub("__HOSTNAME__", @hostname)
         .gsub("__ABI__", @abi)
         .gsub("__SWAP_GB__", @swap_gb.to_s)
         .gsub("__TIMEZONE__", @timezone)
         .gsub("__AUTHORIZED_KEYS_B64__", pkgbase_root_keys_b64)
+        .gsub("__DATA_POOLS_SCRIPT_B64__", data_pools_script_b64)
     end
 
     # Union des clés SSH des users, encodée base64 pour /root/.ssh/
