@@ -51,12 +51,12 @@ describe Beryl::Config::Root do
       web.hosts.keys.sort.should eq(["rails01", "rails02"])
     end
 
-    it "tolère un groupe-dossier sans fichier de définition" do
+    it "charge un groupe à définition vide (api.group.yml sans contenu)" do
       aloli = Beryl::Config::Root.load(fixture("group-dir-without-yml")).account?("aloli").not_nil!
       domain = aloli.domain?("aloli.net").not_nil!
       api = domain.groups["api"]
       api.raw.should be_empty
-      api.source_path.should be_nil
+      api.source_path.should_not be_nil
       api.hosts.size.should eq(1)
     end
 

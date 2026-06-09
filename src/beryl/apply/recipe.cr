@@ -40,11 +40,15 @@ module Beryl::Apply
     class InvalidRecipe < Exception
     end
 
-    # Charge et valide une recette depuis un fichier `.yml`. Le nom
-    # attendu (`expected_name`) est le nom de fichier sans extension :
-    # la convention impose `recipe:` strictement identique.
+    # Suffixe typé d'un fichier de recette.
+    SUFFIX = ".recipe.yml"
+
+    # Charge et valide une recette depuis un fichier `<nom>.recipe.yml`.
+    # Le nom de la recette est *dérivé du nom de fichier* (sans le
+    # suffixe `.recipe.yml`). Le champ `recipe:` est facultatif ; s'il
+    # est présent, il doit correspondre au nom de fichier.
     def self.load(path : String) : Recipe
-      expected_name = File.basename(path, ".yml")
+      expected_name = File.basename(path).rchop(SUFFIX)
       raw =
         begin
           YAML.parse(File.read(path))
@@ -56,17 +60,14 @@ module Beryl::Apply
         "recette `#{path}` : le document doit être un mapping YAML."
       )
 
-      name = root[YAML::Any.new("recipe")]?.try(&.as_s?)
-      raise InvalidRecipe.new(
-        "recette `#{path}` : champ `recipe:` manquant ou non textuel."
-      ) unless name
-
-      unless name == expected_name
+      declared = root[YAML::Any.new("recipe")]?.try(&.as_s?)
+      if declared && declared != expected_name
         raise InvalidRecipe.new(
-          "recette `#{path}` : `recipe: #{name}` ne correspond pas au nom " \
-          "de fichier (`#{expected_name}`). La convention impose l'égalité."
+          "recette `#{path}` : `recipe: #{declared}` ne correspond pas au nom " \
+          "de fichier (`#{expected_name}`). Retirez le champ ou alignez-le."
         )
       end
+      name = expected_name
 
       description = root[YAML::Any.new("description")]?.try(&.as_s?) || ""
       requires = string_array(root, "requires")

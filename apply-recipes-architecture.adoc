@@ -245,18 +245,25 @@ Pas de séparation `meta-recipes/` vs `recipes/`. Tout dans
 
 == Orchestration par host : le dossier `<host>/`
 
+NOTE: Les fichiers sont *typés par extension*
+(`<host>.host.yml`, `<recette>.recipe.yml`) — voir
+link:docs/adr/ADR-015-typed-config-extensions.adoc[ADR-015]. C'est ce
+typage qui permet à `<host>/` (orchestration) de cohabiter sans
+ambiguïté avec `<host>.host.yml` : sans lui, le loader confondrait le
+dossier d'orchestration avec un groupe.
+
 === Structure
 
 [source,text]
 ----
 ~/.config/beryl/aloli/aloli.net/
-├── quantas.yml                       # config bootstrap (zfs, packages, users)
-└── quantas/                          # dossier d'orchestration apply
-    ├── post-install.yml              # symlink → ../../../recipes/recipes/post-install.yml
-    └── ohmyzsh.yml                   # COPIE locale modifiée pour ce host
+├── quantas.host.yml                 # config bootstrap (zfs, packages, users)
+└── quantas/                         # dossier d'orchestration apply
+    ├── post-install.recipe.yml      # symlink → ../../../recipes/recipes/post-install.recipe.yml
+    └── ohmyzsh.recipe.yml           # COPIE locale modifiée pour ce host
 ----
 
-* `quantas.yml` (fichier) : inchangé, c'est la config bootstrap.
+* `quantas.host.yml` (fichier) : inchangé, c'est la config bootstrap.
 * `quantas/` (dossier) : ce qui s'applique à `quantas` au moment
   du `beryl apply quantas`.
 

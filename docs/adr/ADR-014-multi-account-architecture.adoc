@@ -348,24 +348,29 @@ erreur explicite à la résolution.
 ----
 ~/.config/beryl/
 ├── _default.yml                       # socle technique commun à toutes sociétés
-├── .env.yml                           # credentials — 3 niveaux
-├── aloli/                             # dossier société
+├── .env.yml                           # credentials legacy (voir coffres .env.toml.age)
+├── aloli/                             # dossier société (dépôt git chiffré)
 │   ├── _account.yml                   # métadonnées société (optionnel)
-│   ├── aloli.net.yml                  # domaine
+│   ├── .env.toml.age                  # coffre credentials chiffré (v0.3.0)
+│   ├── aloli.net.domain.yml           # domaine
 │   ├── aloli.net/
-│   │   ├── loulou.yml                 # host direct
-│   │   └── web/                       # groupe
-│   │       ├── _group.yml             # config du groupe
-│   │       ├── rails01.yml
-│   │       └── rails02.yml
-│   └── aloli.fr.yml
+│   │   ├── loulou.host.yml            # host direct
+│   │   ├── loulou/                    # orchestration apply de loulou (recettes)
+│   │   ├── web.group.yml              # groupe
+│   │   └── web/
+│   │       ├── rails01.host.yml
+│   │       └── rails02.host.yml
+│   └── aloli.fr.domain.yml
 └── quimeo/
-    ├── quimeo.net.yml
+    ├── quimeo.net.domain.yml
     └── quimeo.net/
-        └── web.yml
+        └── web.host.yml
 ----
 
-La société est *dérivée du chemin* : `~/.config/beryl/aloli/aloli.net.yml`
+Le *type* de chaque fichier est explicite dans son extension typée
+(`.domain.yml` / `.host.yml` / `.group.yml` / `.recipe.yml`) — voir
+link:ADR-015-typed-config-extensions.adoc[ADR-015]. La société est
+*dérivée du chemin* : `~/.config/beryl/aloli/aloli.net.domain.yml`
 appartient forcément à la société `aloli`. Pas besoin d'un champ
 `account:` dans chaque fichier domaine.
 

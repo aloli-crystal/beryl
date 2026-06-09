@@ -358,7 +358,7 @@ module Beryl::CLI::Scan
       log "5.4 YAML écrit dans #{target}"
       log "5 Prochaine étape : beryl bootstrap #{host.account_name}/#{short}.#{host.domain_name}"
     else
-      STDERR.puts "--- YAML suggéré (placez dans #{config_root}/#{host.account_name}/#{host.domain_name}/#{short}.yml) ---"
+      STDERR.puts "--- YAML suggéré (placez dans #{config_root}/#{host.account_name}/#{host.domain_name}/#{short}.host.yml) ---"
       print yaml
       STDERR.puts "--- fin ---"
       STDERR.puts
@@ -790,7 +790,7 @@ module Beryl::CLI::Scan
   def self.resolve_write_target(explicit : String?, auto : Bool, config_root : String, account_name : String, domain_name : String, short : String) : String?
     return explicit if explicit
     return nil unless auto
-    File.join(config_root, account_name, domain_name, "#{short}.yml")
+    File.join(config_root, account_name, domain_name, "#{short}.host.yml")
   end
 
   # Construit la commande à proposer quand beryl scan affiche un YAML

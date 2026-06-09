@@ -3,7 +3,7 @@ require "../../spec_helper"
 private CENTRAL = File.expand_path(File.join(__DIR__, "..", "..", "fixtures", "recipes", "central", "recipes"))
 
 private def central(name : String) : String
-  File.join(CENTRAL, "#{name}.yml")
+  File.join(CENTRAL, "#{name}.recipe.yml")
 end
 
 describe Beryl::Apply::Recipe do

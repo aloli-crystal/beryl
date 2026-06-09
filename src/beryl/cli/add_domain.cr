@@ -78,7 +78,7 @@ module Beryl::CLI::AddDomain
       return EXIT_USAGE
     end
 
-    domain_yml = File.join(account_dir, "#{domain_name}.yml")
+    domain_yml = File.join(account_dir, "#{domain_name}.domain.yml")
     if File.exists?(domain_yml) && !force
       STDERR.puts "beryl : #{domain_yml} existe déjà. Utilisez --force pour écraser."
       return EXIT_USAGE

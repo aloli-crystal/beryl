@@ -144,13 +144,13 @@ EOF
 
 # Domaine + clé publique du banc inline.
 PUB_KEY_INLINE="$(cat "${BENCH_PUB_KEY}")"
-cat > "${BERYL_TEST_ROOT}/qemu/test.yml" <<EOF
+cat > "${BERYL_TEST_ROOT}/qemu/test.domain.yml" <<EOF
 ssh_keys:
   - ${PUB_KEY_INLINE}
 EOF
 
 # Host clientvm.
-cat > "${BERYL_TEST_ROOT}/qemu/test/clientvm.yml" <<EOF
+cat > "${BERYL_TEST_ROOT}/qemu/test/clientvm.host.yml" <<EOF
 provider: local
 ssh_host: 127.0.0.1
 port: 2223
@@ -163,7 +163,7 @@ EOF
 
 # --- Recettes du dépôt central éphémère ---------------------------
 
-cat > "${RECIPES_DIR}/bench-sysrc.yml" <<EOF
+cat > "${RECIPES_DIR}/bench-sysrc.recipe.yml" <<EOF
 recipe: bench-sysrc
 description: Pose une variable rc.conf de test.
 steps:
@@ -172,7 +172,7 @@ steps:
       value: "ok"
 EOF
 
-cat > "${RECIPES_DIR}/bench-file.yml" <<EOF
+cat > "${RECIPES_DIR}/bench-file.recipe.yml" <<EOF
 recipe: bench-file
 description: Écrit un fichier de test avec mode et owner.
 steps:
@@ -184,7 +184,7 @@ steps:
         bonjour depuis beryl apply
 EOF
 
-cat > "${RECIPES_DIR}/bench-user.yml" <<EOF
+cat > "${RECIPES_DIR}/bench-user.recipe.yml" <<EOF
 recipe: bench-user
 description: Crée un utilisateur de test.
 steps:
@@ -193,7 +193,7 @@ steps:
       shell: /bin/sh
 EOF
 
-cat > "${RECIPES_DIR}/bench-keys.yml" <<EOF
+cat > "${RECIPES_DIR}/bench-keys.recipe.yml" <<EOF
 recipe: bench-keys
 description: Synchronise les clés SSH du user de test.
 requires:
@@ -205,7 +205,7 @@ steps:
         - ${PUB_KEY_INLINE}
 EOF
 
-cat > "${RECIPES_DIR}/bench-sshd.yml" <<EOF
+cat > "${RECIPES_DIR}/bench-sshd.recipe.yml" <<EOF
 recipe: bench-sshd
 description: Pose une directive sshd (inoffensive).
 steps:
@@ -214,7 +214,7 @@ steps:
       value: "300"
 EOF
 
-cat > "${RECIPES_DIR}/bench-cron.yml" <<EOF
+cat > "${RECIPES_DIR}/bench-cron.recipe.yml" <<EOF
 recipe: bench-cron
 description: Pose une entrée crontab de test.
 steps:
@@ -223,7 +223,7 @@ steps:
       entry: "@daily /usr/bin/true # ${TEST_CRON_TAG}"
 EOF
 
-cat > "${RECIPES_DIR}/bench-service.yml" <<EOF
+cat > "${RECIPES_DIR}/bench-service.recipe.yml" <<EOF
 recipe: bench-service
 description: Vérifie la lecture d'état d'un service (sshd, déjà actif).
 steps:
@@ -232,7 +232,7 @@ steps:
 EOF
 
 # Agrégat demandé sur le host.
-cat > "${HOST_DIR}/bench-all.yml" <<EOF
+cat > "${HOST_DIR}/bench-all.recipe.yml" <<EOF
 recipe: bench-all
 description: Agrégat de test des primitives apply.
 requires:
@@ -287,7 +287,7 @@ assert_contains "file-write : owner root:wheel" "root:wheel" \
   ssh_client "stat -f %Su:%Sg ${TEST_FILE}"
 
 assert_contains "user-create : utilisateur créé" "${TEST_USER}" \
-  ssh_client "pw show ${TEST_USER}"
+  ssh_client "pw usershow ${TEST_USER}"
 
 assert_contains "user-update-keys : clé déployée" "${PUB_KEY_INLINE}" \
   ssh_client "cat ~${TEST_USER}/.ssh/authorized_keys"
