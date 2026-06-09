@@ -328,6 +328,9 @@ module Beryl::CLI::Bootstrap
   rescue ex : Beryl::Bootstrap::QemuInRescue::TargetDiskNotEmpty
     STDERR.puts "beryl : #{ex.message}"
     EXIT_NOGO
+  rescue ex : Beryl::Bootstrap::QemuInRescue::PkgbaseScopeUnsupported
+    STDERR.puts "beryl : #{ex.message}"
+    EXIT_PKGBASE_NYI
   rescue ex : Beryl::Bootstrap::QemuInRescue::PkgbaseNotYetImplemented
     STDERR.puts "beryl : #{ex.message}"
     EXIT_PKGBASE_NYI

@@ -155,11 +155,22 @@ réseau et sshd. 4 bugs réels trouvés + corrigés par l'itération :
 expliciter (aucun paquet `dhc*` dans le repo base — `dhclient`
 vraisemblablement dans `FreeBSD-runtime`). À trancher au prochain run.
 
-*⏳ Reste (câblage beryl)* — Router `install_type: packages` dans
-`QemuInRescue` (driver pkgbase réutilisant la machinerie QEMU de
-`rescue-run-vm.sh`), lever le gate, puis *test grandeur nature sur un
-vrai serveur dédié en rescue* (amd64). Le script d'install étant
-prouvé, ce reste est surtout du câblage + un essai bare-metal.
+*✅ Câblage `QemuInRescue` fait* — `install_type: packages` est
+désormais routé : `QemuInRescue` rend `install-pkgbase.sh` (placeholders
+disque=/dev/vtbd1, ABI, hostname, clés root = union des clés users) et
+le dépose ; le driver `rescue-run-vm.sh` branche sur `INSTALL_TYPE` —
+pour `packages` il scp + exécute `install-pkgbase.sh` dans la VM mfsBSD
+(réutilisant tout le boot QEMU), puis poweroff, court-circuitant
+bsdinstall/tarballs. Garde-fous Phase 1 : refus explicite de
+multi-disque / RAID / pools data / packages additionnels
+(`PkgbaseScopeUnsupported`). Specs sur le rendu + les garde-fous.
+
+*⏳ Reste* — (1) *test grandeur nature bare-metal* sur un vrai dédié
+amd64 en rescue (`beryl bootstrap --install-type packages` ou champ
+YAML), qui valide aussi que mfsBSD SE 15 fournit `pkg` + les clés
+`/usr/share/keys/pkgbase-15` + réseau ; (2) confirmer DHCP/réseau au
+boot (cf. ci-dessus) ; (3) `base_release_0` est figé sur les releases
+X.0 — gérer `base_release_<minor>` pour 15.1+.
 ====
 
 . *Phase 2 — parité base* +

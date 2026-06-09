@@ -51,6 +51,11 @@ SUDOERS_CONTENT='__SUDOERS_CONTENT_B64__'
 # Les vtbd* sont mappés par beryl dans l'ordre des disques passés à QEMU
 # (vtbd0 = mfsBSD ; vtbd1..vtbdB = pool boot ; vtbd(B+1)..vtbdN = pools data).
 DATA_POOLS_SCRIPT='__DATA_POOLS_SCRIPT_B64__'
+# Type d'install : "distribution_sets" (bsdinstall + tarballs) ou
+# "packages" (pkgbase via install-pkgbase.sh). Chemin du script pkgbase
+# déposé sur le rescue (scp'é dans la VM par la branche pkgbase).
+INSTALL_TYPE="__INSTALL_TYPE__"
+INSTALL_PKGBASE_PATH="__INSTALL_PKGBASE_PATH__"
 
 # ----------------------------------------------------------------------
 # Helpers ssh (wrappers sshpass avec timeouts différenciés)
@@ -126,6 +131,24 @@ while true; do
   fi
   sleep 5
 done
+
+# ----------------------------------------------------------------------
+# BRANCHE pkgbase — install_type: packages
+# ----------------------------------------------------------------------
+# Le script install-pkgbase.sh est autonome (partition + ZFS +
+# `pkg install FreeBSD-*` + config + bootloader + export). Il remplace
+# entièrement les étapes bsdinstall/tarball ci-dessous. Validé in vivo
+# (boot FreeBSD 15). La cible est /dev/vtbd1 dans la VM (1er disque
+# passthrough). Réutilise tout le boot QEMU + helpers ssh_vm ci-dessus.
+if [ "$INSTALL_TYPE" = "packages" ]; then
+  echo "[rescue-run-vm] pkgbase : upload de install-pkgbase.sh dans la VM"
+  scp_to_vm "$INSTALL_PKGBASE_PATH" "/tmp/install-pkgbase.sh"
+  echo "[rescue-run-vm] pkgbase : exécution (partition + pkg base + bootloader, ~3-6 min)"
+  ssh_vm_long "sh /tmp/install-pkgbase.sh"
+  echo "[rescue-run-vm] pkgbase : install terminée, poweroff de la VM"
+  ssh_vm "poweroff" >/dev/null 2>&1 || true
+  exit 0
+fi
 
 # ----------------------------------------------------------------------
 # Étape 2 — s'assure que MANIFEST + base.txz + kernel.txz sont présents

@@ -160,8 +160,12 @@ module Beryl::Bootstrap
 
     TEMPLATE_INSTALLERCONFIG = {{ read_file("#{__DIR__}/templates/installerconfig.sh") }}
     TEMPLATE_RESCUE_RUN_VM   = {{ read_file("#{__DIR__}/templates/rescue-run-vm.sh") }}
+    # Script d'install pkgbase autonome (validé in vivo, boot FreeBSD 15).
+    # Utilisé quand `install_type: packages` au lieu de bsdinstall+tarballs.
+    TEMPLATE_INSTALL_PKGBASE = {{ read_file("#{__DIR__}/templates/install-pkgbase.sh") }}
 
-    RESCUE_RUN_VM_PATH = "#{WORK_DIR}/rescue-run-vm.sh"
+    RESCUE_RUN_VM_PATH   = "#{WORK_DIR}/rescue-run-vm.sh"
+    INSTALL_PKGBASE_PATH = "#{WORK_DIR}/install-pkgbase.sh"
     # Matche tous les mfsBSD-SE quelle que soit leur version / extension
     # (.iso côté GitHub, .img côté ancien vx.sk).
     QEMU_PATTERN = "qemu-system-x86_64.*mfsbsd-se-"
@@ -248,25 +252,29 @@ module Beryl::Bootstrap
           seen_disks << d
         end
       end
-      # pkgbase n'est pas encore câblé côté runtime (driver shell). Le
-      # champ est accepté dans le YAML et validé ici pour figer
-      # l'interface, mais la route d'install est encore le tarball
-      # classique (base.txz + kernel.txz). Voir ADR-013 § « Pkgbase en
-      # opt-in » pour le chemin d'implémentation prévu.
+      # pkgbase (install_type: packages) — Phase 1 : mono-disque,
+      # root-only (le script install-pkgbase.sh ne couvre pas encore
+      # RAID, pools data, packages additionnels ni users non-root).
+      # On REFUSE explicitement ces cas plutôt que de les ignorer en
+      # silence (règle Aloli). Voir pkgbase-install-architecture.adoc.
       if @install_type == "packages"
-        raise PkgbaseNotYetImplemented.new(
-          "install_type: packages (pkgbase) n'est pas encore câblé côté runtime. " \
-          "Pour l'instant, utilisez install_type: distribution_sets (défaut). " \
-          "Voir docs/adr/ADR-013-no-chroot-post-install.adoc § Pkgbase opt-in " \
-          "pour le plan d'implémentation."
-        )
+        raise PkgbaseScopeUnsupported.new("install_type: packages — Phase 1 ne gère qu'un seul disque (reçu #{@disks.size}).") if @disks.size > 1
+        raise PkgbaseScopeUnsupported.new("install_type: packages — Phase 1 ne gère pas les pools data.") unless @data_pools.empty?
+        raise PkgbaseScopeUnsupported.new("install_type: packages — Phase 1 ne gère pas le RAID (utilisez raid: stripe).") unless @raid == "stripe"
+        raise PkgbaseScopeUnsupported.new("install_type: packages — Phase 1 ne gère pas les packages additionnels (#{@packages.join(", ")}). Posez-les via beryl apply après bootstrap.") unless @packages.empty?
       end
       @users.each(&.validate!)
 
       @mfsbsd_url = iso_url || self.class.default_mfsbsd_url(@mfsbsd_version)
     end
 
+    # Conservée (rétro-compat) ; plus levée depuis le câblage pkgbase.
     class PkgbaseNotYetImplemented < Exception
+    end
+
+    # Levée quand `install_type: packages` est demandé avec une option
+    # hors périmètre Phase 1 (multi-disque, RAID, pools data, packages).
+    class PkgbaseScopeUnsupported < Exception
     end
 
     VALID_RAID          = %w[stripe mirror raidz raidz2 raidz3]
@@ -301,9 +309,13 @@ module Beryl::Bootstrap
       log_step("7.1b NOGO si BSD déjà en place sur #{all_qemu_disks.join(", ")}") { check_target_disks_no_bsd }
       log_step("7.2 installe qemu-system-x86, ovmf, sshpass et curl côté rescue") { install_packages }
       log_step("7.3 télécharge l'image mfsBSD SE #{@mfsbsd_version} si nécessaire") { download_mfsbsd_if_needed }
-      log_step("7.4 dépose installerconfig + driver shell sur le rescue") do
+      log_step("7.4 dépose #{@install_type == "packages" ? "install-pkgbase.sh" : "installerconfig"} + driver shell sur le rescue") do
         prepare_ovmf_vars
-        @rescue_conn.write_file(INSTALLERCFG, render_installerconfig, mode: "0644")
+        if @install_type == "packages"
+          upload_install_pkgbase
+        else
+          @rescue_conn.write_file(INSTALLERCFG, render_installerconfig, mode: "0644")
+        end
         upload_driver_script
       end
       # NB : `beryl follow-install <host>` reste disponible pour
@@ -365,6 +377,30 @@ module Beryl::Bootstrap
         .gsub("__PACKAGES__", @packages.join(" "))
         .gsub("__SUDOERS_CONTENT_B64__", sudoers_base64)
         .gsub("__DATA_POOLS_SCRIPT_B64__", data_pools_script_b64)
+        .gsub("__INSTALL_TYPE__", @install_type)
+        .gsub("__INSTALL_PKGBASE_PATH__", INSTALL_PKGBASE_PATH)
+    end
+
+    # Rend le script d'install pkgbase (autonome). La cible est
+    # /dev/vtbd1 dans la VM QEMU (vtbd0 = mfsBSD, le disque cible est le
+    # premier disque passthrough). Phase 1 : mono-disque, clés root =
+    # union des clés SSH des users déclarés.
+    def render_install_pkgbase : String
+      TEMPLATE_INSTALL_PKGBASE
+        .gsub("__TARGET_DISK__", "/dev/vtbd1")
+        .gsub("__POOL_NAME__", @pool_name)
+        .gsub("__HOSTNAME__", @hostname)
+        .gsub("__ABI__", @abi)
+        .gsub("__SWAP_GB__", @swap_gb.to_s)
+        .gsub("__TIMEZONE__", @timezone)
+        .gsub("__AUTHORIZED_KEYS_B64__", pkgbase_root_keys_b64)
+    end
+
+    # Union des clés SSH des users, encodée base64 pour /root/.ssh/
+    # authorized_keys (accès root post-install en Phase 1 pkgbase).
+    private def pkgbase_root_keys_b64 : String
+      keys = @users.flat_map(&.ssh_keys).uniq
+      Base64.strict_encode(keys.join("\n") + "\n")
     end
 
     # Ordre global des disques passés à QEMU : boot d'abord, puis pools
@@ -542,6 +578,17 @@ module Beryl::Bootstrap
         @rescue_conn.upload(tmp.path, RESCUE_RUN_VM_PATH)
       end
       @rescue_conn.exec("chmod 755 #{Process.quote(RESCUE_RUN_VM_PATH)}")
+    end
+
+    # Dépose le script d'install pkgbase rendu sur le rescue (le driver
+    # le scp ensuite dans la VM mfsBSD et l'exécute).
+    private def upload_install_pkgbase : Nil
+      File.tempfile(prefix: "beryl-install-pkgbase-", suffix: ".sh") do |tmp|
+        tmp.print(render_install_pkgbase)
+        tmp.close
+        @rescue_conn.upload(tmp.path, INSTALL_PKGBASE_PATH)
+      end
+      @rescue_conn.exec("chmod 755 #{Process.quote(INSTALL_PKGBASE_PATH)}")
     end
 
     private def hint_follow_bsdinstall : Nil

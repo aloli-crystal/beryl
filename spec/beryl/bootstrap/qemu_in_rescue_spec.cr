@@ -171,10 +171,37 @@ describe Beryl::Bootstrap::QemuInRescue do
       make_bootstrap(install_type: "distribution_sets").install_type.should eq("distribution_sets")
     end
 
-    it "lève PkgbaseNotYetImplemented pour install_type: packages" do
-      expect_raises(Beryl::Bootstrap::QemuInRescue::PkgbaseNotYetImplemented, /pkgbase.*pas encore/) do
-        make_bootstrap(install_type: "packages")
+    it "accepte install_type: packages (mono-disque, root) — pkgbase câblé" do
+      make_bootstrap(install_type: "packages").install_type.should eq("packages")
+    end
+
+    it "refuse pkgbase hors périmètre Phase 1 (multi-disque, RAID, data pools, packages)" do
+      expect_raises(Beryl::Bootstrap::QemuInRescue::PkgbaseScopeUnsupported, /seul disque/) do
+        make_bootstrap(install_type: "packages", disks: ["/dev/sda", "/dev/sdb"], raid: "mirror")
       end
+      expect_raises(Beryl::Bootstrap::QemuInRescue::PkgbaseScopeUnsupported, /RAID/) do
+        make_bootstrap(install_type: "packages", raid: "mirror")
+      end
+      expect_raises(Beryl::Bootstrap::QemuInRescue::PkgbaseScopeUnsupported, /packages additionnels/) do
+        make_bootstrap(install_type: "packages", packages: ["sudo"])
+      end
+    end
+
+    it "rend install-pkgbase.sh avec les placeholders substitués" do
+      sh = make_bootstrap(install_type: "packages", abi: "FreeBSD:15:amd64").render_install_pkgbase
+      sh.should_not contain("__TARGET_DISK__")
+      sh.should_not contain("__ABI__")
+      sh.should_not contain("__AUTHORIZED_KEYS_B64__")
+      sh.should contain("/dev/vtbd1")
+      sh.should contain("FreeBSD:15:amd64")
+      # Le fix in vivo : clés du base, pas des ports.
+      sh.should contain("/usr/share/keys/pkgbase-")
+    end
+
+    it "le driver porte le type d'install et le chemin pkgbase" do
+      sh = make_bootstrap(install_type: "packages").render_rescue_run_vm
+      sh.should contain(%(INSTALL_TYPE="packages"))
+      sh.should contain("install-pkgbase.sh")
     end
 
     it "a des défauts raisonnables pour les paramètres non versionnés" do
