@@ -2,6 +2,7 @@ require "option_parser"
 require "../config"
 require "../providers"
 require "./account_utils"
+require "./config_git"
 
 # Sous-commande `beryl add-domain` : ajoute un domaine (zone DNS) à
 # une société et crée `~/.config/beryl/<société>/<domaine>.yml`.
@@ -32,6 +33,7 @@ module Beryl::CLI::AddDomain
     force = false
     non_interactive = false
     dry_run = false
+    no_commit = false
     positional = [] of String
 
     parser = OptionParser.new do |p|
@@ -47,6 +49,7 @@ module Beryl::CLI::AddDomain
       p.on("-k FILE", "--admin-key=FILE", "Fichier .pub local (auto via ~/.ssh/ sinon)") { |v| admin_key_file = File.expand_path(v, home: true) }
       p.on("-f", "--force", "Écrase le fichier domaine existant") { force = true }
       p.on("-N", "--non-interactive", "Refuse tout prompt") { non_interactive = true }
+      p.on("--no-commit", "N'auto-commite pas le fichier domaine dans le dépôt git de config") { no_commit = true }
       p.on("-h", "--help", "Aide") { puts p; exit 0 }
       p.unknown_args { |rest, _| positional = rest }
     end
@@ -148,6 +151,11 @@ module Beryl::CLI::AddDomain
 
     File.write(domain_yml, content)
     STDERR.puts "[beryl add-domain] 3 #{domain_yml} créé."
+    Beryl::CLI::ConfigGit.commit(
+      [domain_yml],
+      "add-domain : #{domain_name} (dns=#{dns_provider}, compute=#{compute_provider})",
+      no_commit,
+    )
     STDERR.puts
     STDERR.puts "Récapitulatif #{domain_name} :"
     STDERR.puts "  - zone DNS gérée par : #{dns_provider}"

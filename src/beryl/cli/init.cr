@@ -5,6 +5,7 @@ require "../providers"
 require "./account_utils"
 require "./add_provider"
 require "./add_domain"
+require "./config_git"
 
 # Sous-commande `beryl init [<société>]` (refondue ADR-014) :
 # initialise l'arborescence `~/.config/beryl/` avec une société.
@@ -32,6 +33,7 @@ module Beryl::CLI::Init
     force = false
     non_interactive = false
     dry_run = false
+    no_commit = false
     positional = [] of String
 
     parser = OptionParser.new do |p|
@@ -46,6 +48,7 @@ module Beryl::CLI::Init
       p.on("-n", "--dry-run", "Affiche ce qui serait créé sans rien écrire") { dry_run = true }
       p.on("-f", "--force", "Écrase _account.yml si existant") { force = true }
       p.on("-N", "--non-interactive", "Refuse tout prompt") { non_interactive = true }
+      p.on("--no-commit", "N'auto-commite pas _account.yml dans le dépôt git de config") { no_commit = true }
       p.on("-h", "--help", "Aide") { puts p; exit 0 }
       p.unknown_args { |rest, _| positional = rest }
     end
@@ -110,6 +113,13 @@ module Beryl::CLI::Init
     if !File.exists?(account_meta_path) || force
       STDERR.puts
       write_account_metadata(account_meta_path, account, non_interactive)
+      # Auto-commit si le dossier société est déjà un dépôt git (sinon
+      # skip silencieux : l'opérateur fera `git init` quand il voudra).
+      Beryl::CLI::ConfigGit.commit(
+        [account_meta_path],
+        "init : société #{account}",
+        no_commit,
+      )
     end
 
     STDERR.puts

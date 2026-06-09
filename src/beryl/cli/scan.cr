@@ -7,7 +7,9 @@ require "../providers"
 require "ssh"
 require "./credentials"
 require "./dns_setup"
+require "./dns_apply"
 require "./provider_shortcut"
+require "./config_git"
 
 # Sous-commande `beryl scan <host>` : se connecte au rescue Linux,
 # détecte les disques, propose un YAML pour le fichier host.
@@ -126,6 +128,7 @@ module Beryl::CLI::Scan
     account_hint : String? = nil
     domain_hint : String? = nil
     non_interactive = false
+    no_commit = false
     positional = [] of String
 
     parser = OptionParser.new do |p|
@@ -144,6 +147,7 @@ module Beryl::CLI::Scan
       p.on("-z ZONE", "--zone=ZONE", "Zone DNS pour --dns (défaut : le domaine)") { |v| zone_flag = v }
       p.on("-D", "--dns", "Pose records DNS + reverse + rename OVH") { dns_setup = true }
       p.on("-N", "--non-interactive", "Refuse toute invite") { non_interactive = true }
+      p.on("--no-commit", "N'auto-commite pas le YAML dans le dépôt git de config") { no_commit = true }
       p.on("-h", "--help", "Aide") { puts p; exit 0 }
       p.unknown_args { |rest, _| positional = rest }
     end
@@ -207,25 +211,44 @@ module Beryl::CLI::Scan
       server_id_flag = answer
     end
 
-    # --dns : faire le rename DNS + reverse AVANT le scan disques.
-    # En dry-run, run_dns_setup respecte le flag et n'appelle aucune API.
-    dns_plan : Beryl::CLI::DnsSetup::Plan? = nil
+    # --dns : pose le nommage DNS AVANT le scan disques, mais en
+    # BEST-EFFORT. Le DNS est SECONDAIRE par rapport au scan + write :
+    # un échec ici (zone introuvable, API qui 404…) affiche un warning
+    # et laisse le scan continuer vers la détection disques + l'écriture
+    # du host. Constaté qsbg, 9 juin 2026 : un 404 OVH sur une zone Gandi
+    # avortait TOUT le scan (ni disques, ni --write). Plus jamais.
+    #
+    # En dry-run, chaque flux respecte le flag et n'appelle aucune API.
+    dns_short : String? = nil
     if dns_setup
-      case effective_provider
-      when "ovh"
-        dns_plan = run_dns_setup(host, hostname_flag, zone_flag, non_interactive, dry_run: dry_run)
-      when "scaleway"
-        sid = server_id_flag || host.scaleway_server_id || raise MissingProviderConfig.new(
-          "--dns + provider=scaleway : server_id manquant (ni --server-id, ni scaleway.server_id dans le merge)"
-        )
-        zone = scaleway_zone_override || host.scaleway_zone
-        dns_plan = run_dns_setup_scaleway(host, hostname_flag, zone_flag, non_interactive, dry_run, sid, zone)
-      when "dedibox"
-        sid = server_id_flag || host.dedibox_server_id || raise MissingDediboxServerId.new
-        dns_plan = run_dns_setup_dedibox(host, hostname_flag, zone_flag, non_interactive, dry_run, sid)
-      else
-        STDERR.puts "beryl : --dns n'est pas câblé pour provider=#{effective_provider.inspect} " \
-                    "(supportés : dedibox, ovh, scaleway). Le scan continue sans DNS."
+      begin
+        case effective_provider
+        when "ovh"
+          # Multi-provider (ADR-014) : forward via le dns_provider RÉEL de
+          # la zone (Gandi, OVH…), reverse + rename via OVH. Même cœur que
+          # `beryl dns` — voir Beryl::CLI::DnsApply. (Avant : DnsSetup
+          # 100% OVH → 404 sur une zone hébergée ailleurs.)
+          dns_short = Beryl::CLI::DnsApply.for_host(
+            host, hostname_flag, zone_flag, dry_run, non_interactive, cmd: "beryl scan").short_name
+        when "scaleway"
+          sid = server_id_flag || host.scaleway_server_id || raise MissingProviderConfig.new(
+            "--dns + provider=scaleway : server_id manquant (ni --server-id, ni scaleway.server_id dans le merge)"
+          )
+          zone = scaleway_zone_override || host.scaleway_zone
+          dns_short = run_dns_setup_scaleway(host, hostname_flag, zone_flag, non_interactive, dry_run, sid, zone).short_name
+        when "dedibox"
+          sid = server_id_flag || host.dedibox_server_id || raise MissingDediboxServerId.new
+          dns_short = run_dns_setup_dedibox(host, hostname_flag, zone_flag, non_interactive, dry_run, sid).short_name
+        else
+          STDERR.puts "beryl : --dns n'est pas câblé pour provider=#{effective_provider.inspect} " \
+                      "(supportés : dedibox, ovh, scaleway). Le scan continue sans DNS."
+        end
+      rescue ex
+        # Best-effort : on ne casse pas le scan pour un DNS raté. Inclut
+        # l'abandon explicite au prompt DNS (Aborted) → on saute juste le
+        # DNS, le scan disques + write se poursuit.
+        STDERR.puts "beryl : étape DNS non aboutie (#{ex.class}: #{ex.message}) — " \
+                    "le scan continue (détection disques + écriture du host)."
       end
     end
 
@@ -255,13 +278,9 @@ module Beryl::CLI::Scan
       STDERR.puts
     end
 
-    short = if dns_plan
-              dns_plan.short_name
-            elsif hostname_flag
-              hostname_flag.not_nil!
-            else
-              default_hostname(host.fqdn)
-            end
+    # `dns_short` est le nom court retenu par l'étape DNS (flag ou prompt) ;
+    # il prime pour que le YAML porte le même nom que les records posés.
+    short = dns_short || hostname_flag || default_hostname(host.fqdn)
 
     # En dry-run, on s'arrête ici : on a affiché ce qu'on ferait
     # (plan DNS si --dns), on annonce ce qui se passerait côté disques
@@ -356,6 +375,12 @@ module Beryl::CLI::Scan
       Dir.mkdir_p(File.dirname(target))
       File.write(target, yaml)
       log "5.4 YAML écrit dans #{target}"
+      zroot_raid = pools.find(&.boot).try(&.raid) || 0
+      Beryl::CLI::ConfigGit.commit(
+        [target],
+        "scan : #{short}.#{host.domain_name} (#{pools.sum(&.disks.size)} disques, zroot raid#{zroot_raid})",
+        no_commit,
+      )
       log "5 Prochaine étape : beryl bootstrap #{host.account_name}/#{short}.#{host.domain_name}"
     else
       STDERR.puts "--- YAML suggéré (placez dans #{config_root}/#{host.account_name}/#{host.domain_name}/#{short}.host.yml) ---"
@@ -821,38 +846,7 @@ module Beryl::CLI::Scan
     Beryl.rerun_hint("scan", args, extras, replace_host: replace)
   end
 
-  # Flux --dns : prompt nom + zone, calcule le plan, applique.
-  def self.run_dns_setup(
-    host : Beryl::Config::ResolvedHost,
-    hostname_flag : String?,
-    zone_flag : String?,
-    non_interactive : Bool,
-    dry_run : Bool = false,
-  ) : Beryl::CLI::DnsSetup::Plan
-    service_name = host.ovh_service_name || raise "--dns nécessite un host OVH avec service_name (got provider=#{host.provider.inspect})"
-    short = hostname_flag || (non_interactive ? raise("--dns + --non-interactive requiert --hostname=NAME") : ask("Nom court du serveur (ex: loulou) : ", default: ""))
-    raise Aborted.new if short.empty?
-    zone = zone_flag || host.domain_name
-    client = Beryl::CLI::Credentials.ovh_client
-    plan = Beryl::CLI::DnsSetup.build_plan(client, service_name, short, zone)
-    STDERR.puts
-    STDERR.puts plan.describe
-    STDERR.puts
-    if dry_run
-      log "5 DRY-RUN : plan DNSaffiché, aucun appel API effectué"
-      return plan
-    end
-    unless non_interactive
-      ans = ask("Exécuter ces actions ? [o/N] : ", default: "N")
-      raise Aborted.new unless ans.downcase.starts_with?("o") || ans.downcase.starts_with?("y")
-    end
-    logger = Proc(String, Nil).new { |m| log(m); nil }
-    Beryl::CLI::DnsSetup.apply!(client, plan, logger)
-    log "5.3 OVH : nommage DNS posé : #{plan.fqdn} ↔ #{service_name}"
-    plan
-  end
-
-  # Variante Dedibox de `run_dns_setup`. Différences :
+  # Variante Dedibox du flux `--dns`. Différences :
   #   - IPs + current_hostname viennent de l'API Dedibox
   #     (`GET /server/{id}`), pas OVH.
   #   - records A/AAAA posés via le DNS provider de la zone

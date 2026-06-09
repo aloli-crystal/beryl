@@ -3,6 +3,7 @@ require "api-scaleway/scaleway_api"
 require "../config"
 require "../providers"
 require "./account_utils"
+require "./config_git"
 
 # Sous-commande `beryl add-provider` : ajoute un fournisseur à une
 # société (ADR-014). Credentials stockés dans `.env.yml[account][provider]`.
@@ -29,6 +30,7 @@ module Beryl::CLI::AddProvider
     regen_credentials = false
     non_interactive = false
     dry_run = false
+    no_commit = false
     positional = [] of String
 
     parser = OptionParser.new do |p|
@@ -41,6 +43,7 @@ module Beryl::CLI::AddProvider
       p.on("-n", "--dry-run", "Affiche ce qui serait fait sans écrire ni appeler d'API") { dry_run = true }
       p.on("-r", "--regen-credentials", "Force la régénération des credentials dérivés (ex: OVH consumer key)") { regen_credentials = true }
       p.on("-N", "--non-interactive", "Refuse tout prompt") { non_interactive = true }
+      p.on("--no-commit", "N'auto-commite pas le coffre chiffré dans le dépôt git de config") { no_commit = true }
       p.on("-h", "--help", "Aide") { puts p; exit 0 }
       p.unknown_args { |rest, _| positional = rest }
     end
@@ -128,6 +131,18 @@ module Beryl::CLI::AddProvider
     end
 
     STDERR.puts "[beryl add-provider] 2 Credentials posés dans #{env_path}[#{account}][#{provider.name}]."
+    # Auto-commit défensif : `.env.yml` est en clair et gitignore dans le
+    # dépôt de config (un `.gitignore` défensif existe côté quimeo/beryl-config).
+    # `ConfigGit.commit` ne force jamais `git add -f` : le fichier ignoré
+    # n'est donc pas stagé → commit no-op (« rien à committer »), aucun
+    # secret en clair versionné. Si l'opérateur migre vers le coffre
+    # chiffré (`beryl env migrate`), c'est `.env.toml.age` (commitable)
+    # qui sera versionné par `env migrate`/`env edit`.
+    Beryl::CLI::ConfigGit.commit(
+      [env_path],
+      "add-provider : #{account}/#{provider.name}",
+      no_commit,
+    )
     EXIT_OK
   rescue ex : Beryl::CLI::AccountUtils::Aborted
     STDERR.puts "beryl : abandon"

@@ -3,6 +3,7 @@ require "secrets"
 require "toml"
 require "../config"
 require "../xdg"
+require "./config_git"
 
 # `beryl env` — gestion des credentials chiffrés par société.
 #
@@ -58,10 +59,12 @@ module Beryl::CLI::Env
   private def self.cmd_migrate(config_root : String, argv : Array(String)) : Int32
     force = false
     purge = false
+    no_commit = false
     OptionParser.parse(argv.dup) do |parser|
       parser.banner = "USAGE : beryl env migrate [--force] [--purge-yaml] [<société>...]"
       parser.on("-f", "--force", "Écrase un coffre destination déjà présent (DANGEREUX)") { force = true }
       parser.on("-p", "--purge-yaml", "Supprime la section migrée de .env.yml après écriture du coffre") { purge = true }
+      parser.on("--no-commit", "N'auto-commite pas le coffre chiffré dans le dépôt git de config") { no_commit = true }
       parser.on("-h", "--help", "Affiche cette aide") { puts parser; exit 0 }
     end
     only = argv.reject { |a| a.starts_with?("-") }
@@ -116,6 +119,15 @@ module Beryl::CLI::Env
       migrated << account
       STDOUT.puts "[#{account}] #{providers.size} provider(s) → #{vault_path}"
 
+      # Le coffre `.env.toml.age` est chiffré → commitable. Auto-commit
+      # dans le dépôt de config société (un par société, chacun dans son
+      # propre dépôt).
+      Beryl::CLI::ConfigGit.commit(
+        [vault_path],
+        "env : coffre #{account} mis à jour (migrate)",
+        no_commit,
+      )
+
       if purge
         env_file.clear_account(account)
       end
@@ -143,9 +155,11 @@ module Beryl::CLI::Env
   private def self.cmd_edit(config_root : String, argv : Array(String)) : Int32
     account = ""
     create = false
+    no_commit = false
     OptionParser.parse(argv.dup) do |parser|
       parser.banner = "USAGE : beryl env edit [--create] <société>"
       parser.on("-c", "--create", "Crée un coffre vide si absent") { create = true }
+      parser.on("--no-commit", "N'auto-commite pas le coffre chiffré dans le dépôt git de config") { no_commit = true }
       parser.on("-h", "--help", "Affiche cette aide") { puts parser; exit 0 }
     end
     positional = argv.reject { |a| a.starts_with?("-") }
@@ -196,6 +210,12 @@ module Beryl::CLI::Env
     File.chmod(vault_path, 0o600)
 
     STDOUT.puts "[edit] #{vault_path} mis à jour."
+    # Coffre chiffré → commitable. Auto-commit dans le dépôt de config.
+    Beryl::CLI::ConfigGit.commit(
+      [vault_path],
+      "env : coffre #{account} mis à jour (edit)",
+      no_commit,
+    )
     0
   rescue Secrets::NotInitializedError
     STDERR.puts "beryl env edit : aucune master key de chiffrement disponible."
