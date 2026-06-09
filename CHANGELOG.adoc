@@ -20,7 +20,9 @@ upsert idempotent via `PUT`).
 * `Beryl::Providers::Gandi` : `ensure_record` (A/AAAA/CNAME/TXT…),
   `refresh_zone` (no-op — Gandi propage seul), `set_reverse` lève
   (le PTR relève de l'hébergeur du bloc d'IP, pas de Gandi).
-* Credentials : `GANDI_PAT` (token avec permission « Gérer le DNS »).
+* Credentials : `GANDI_PAT` (token avec la permission Gandi
+  « Gérer la configuration technique des domaines » — celle qui couvre
+  les enregistrements DNS).
 * Dépendance : `api-gandi` (à pousser sur `aloli-crystal/api-gandi`
   puis basculer la dépendance `path:` → `github:`).
 

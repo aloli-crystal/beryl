@@ -18,7 +18,7 @@ module Beryl::Providers
 
     private def client : GandiApi::Client
       @injected_client || GandiApi::Client.new(token: ENV["GANDI_PAT"]? || raise(
-        "GANDI_PAT absent : générez un Personal Access Token Gandi (permission « Gérer le DNS ») " \
+        "GANDI_PAT absent : générez un Personal Access Token Gandi (permission « Gérer la configuration technique des domaines ») " \
         "et ajoutez-le via `beryl add-provider <société>/gandi`."
       ))
     end
@@ -70,20 +70,20 @@ module Beryl::Providers
       [
         Beryl::EnvVarSpec.new(
           name: "GANDI_PAT",
-          description: "Personal Access Token Gandi avec la permission « Gérer le DNS »",
+          description: "Personal Access Token Gandi avec la permission « Gérer la configuration technique des domaines »",
           secret: true,
         ),
       ]
     end
 
     def credentials_help_url : String
-      "https://admin.gandi.net/organizations/ (Paramètres du compte → Personal Access Tokens → créer un token avec « Gérer le DNS »)"
+      "https://admin.gandi.net/organizations/ (Paramètres du compte → Personal Access Tokens → créer un token avec « Gérer la configuration technique des domaines »)"
     end
 
     def credentials_help_details : String?
       "Beryl appelle l'API Gandi LiveDNS v5 :\n" \
       "  GET/PUT  /v5/livedns/domains/<zone>/records/...\n" \
-      "Le PAT doit porter la permission « Gérer le DNS » sur l'organisation du domaine."
+      "Le PAT doit porter la permission « Gérer la configuration technique des domaines » sur l'organisation du domaine."
     end
   end
 end
