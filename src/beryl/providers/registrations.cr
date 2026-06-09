@@ -13,3 +13,4 @@
 Beryl::Providers.register(Beryl::Providers::Ovh.new)
 Beryl::Providers.register(Beryl::Providers::Scaleway.new)
 Beryl::Providers.register(Beryl::Providers::Dedibox.new)
+Beryl::Providers.register(Beryl::Providers::Gandi.new)

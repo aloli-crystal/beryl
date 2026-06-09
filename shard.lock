@@ -4,6 +4,10 @@ shards:
     git: https://github.com/aloli-crystal/api-dedibox.git
     version: 0.1.6+git.commit.2906a0e81cd38b3ab8ce4c5ad6d9f9972a4a1cbf
 
+  api-gandi:
+    path: ../api-gandi
+    version: 0.1.0
+
   api-ovh:
     git: https://github.com/aloli-crystal/api-ovh.git
     version: 0.7.2+git.commit.a00b46fcb264b44d795b02b908afc906eed7ad56

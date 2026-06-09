@@ -9,6 +9,21 @@ et ce projet suit https://semver.org/lang/fr/[Semantic Versioning].
 
 == [Non publié]
 
+=== Provider Gandi (DNS)
+
+Nouveau provider `gandi` (capability `:dns` uniquement), pour les
+domaines dont la zone DNS est gérée chez Gandi (compute ailleurs,
+ex: serveurs OVH). S'appuie sur un nouveau shard `api-gandi` (client
+Crystal pur de l'API Gandi LiveDNS v5, auth Personal Access Token,
+upsert idempotent via `PUT`).
+
+* `Beryl::Providers::Gandi` : `ensure_record` (A/AAAA/CNAME/TXT…),
+  `refresh_zone` (no-op — Gandi propage seul), `set_reverse` lève
+  (le PTR relève de l'hébergeur du bloc d'IP, pas de Gandi).
+* Credentials : `GANDI_PAT` (token avec permission « Gérer le DNS »).
+* Dépendance : `api-gandi` (à pousser sur `aloli-crystal/api-gandi`
+  puis basculer la dépendance `path:` → `github:`).
+
 == 0.4.0 (13 mai 2026)
 
 === Headscale Phases 2 → 4 — 5 nouvelles primitives + flag `--transport overlay`
