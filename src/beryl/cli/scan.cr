@@ -236,7 +236,7 @@ module Beryl::CLI::Scan
     # « Et cela plante, à quoi sert le dry-run ? »
     disks = [] of Disk
     unless dry_run
-      conn = host.connection
+      conn = host.rescue_connection
       # On affiche la clé privée qui sera tentée : quand SSH échoue
       # en « Permission denied (publickey) », l'opérateur doit pouvoir
       # vérifier d'un coup d'œil que la clé publique correspondante
