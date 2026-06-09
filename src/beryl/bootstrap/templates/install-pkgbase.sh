@@ -162,15 +162,27 @@ cp "/usr/share/zoneinfo/${TIMEZONE}" /mnt/etc/localtime
 
 echo "==> [beryl] Installation des paquets (${PACKAGES:-aucun})"
 if [ -n "${PACKAGES}" ]; then
-  # Le repo pkg par défaut (sudo/zsh/curl/git…) signe par fingerprints
-  # dans /usr/share/keys/pkg ; avec --rootdir, pkg le cherche sous /mnt.
-  # On copie depuis l'hôte d'install si la cible ne l'a pas encore (même
-  # logique que les clés pkgbase plus haut).
-  [ -d /mnt/usr/share/keys/pkg ] || cp -R /usr/share/keys/pkg /mnt/usr/share/keys/ 2>/dev/null || true
-  # Hors chroot (--rootdir) → pas de bug Capsicum signal 12. ABI explicite
-  # pour cohérence hôte d'install / cible (même release).
+  # Le repo pkg par défaut (FreeBSD-ports) signe par fingerprints dans
+  # /usr/share/keys/pkg ; avec --rootdir, pkg les cherche sous /mnt.
+  # ATTENTION : la base pkgbase crée parfois le DOSSIER
+  # /mnt/usr/share/keys/pkg mais VIDE (sans trusted/) → « No trusted
+  # certificates ». On peuple donc TOUJOURS depuis l'hôte d'install (pas
+  # de skip-si-présent — le bug de la 1re passe in vivo).
+  mkdir -p /mnt/usr/share/keys/pkg
+  cp -Rf /usr/share/keys/pkg/. /mnt/usr/share/keys/pkg/ 2>/dev/null || true
+  echo "    DIAG clés ports (hôte) : $(ls /usr/share/keys/pkg/trusted/ 2>/dev/null | tr '\n' ' ')"
+  echo "    DIAG clés ports (/mnt) : $(ls /mnt/usr/share/keys/pkg/trusted/ 2>/dev/null | tr '\n' ' ')"
+  # Sans `pkg update`, le repo ports « cannot be opened. pkg update
+  # required » (catalogue absent dans /mnt/var/db/pkg). On le récupère
+  # explicitement (|| true : un repo annexe type ports-kmods peut
+  # échouer sans bloquer l'install des paquets demandés).
+  # IGNORE_OSVERSION : /mnt pkgbase n'expose pas toujours l'OSVERSION →
+  # évite le refus « guessing the OSVERSION ». Hors chroot (--rootdir)
+  # → pas de bug Capsicum signal 12.
   # shellcheck disable=SC2086
-  env ABI="${ABI}" pkg --rootdir /mnt install -y ${PACKAGES}
+  env ABI="${ABI}" IGNORE_OSVERSION=yes pkg --rootdir /mnt update -f || true
+  # shellcheck disable=SC2086
+  env ABI="${ABI}" IGNORE_OSVERSION=yes pkg --rootdir /mnt install -y ${PACKAGES}
 fi
 
 echo "==> [beryl] Création des utilisateurs (zéro accès root : admin + sudo)"
