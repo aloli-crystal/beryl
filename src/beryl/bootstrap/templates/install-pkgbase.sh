@@ -115,12 +115,20 @@ mkdir -p /mnt/usr/share/keys
 cp -R "/usr/share/keys/pkgbase-${VMAJ}" /mnt/usr/share/keys/
 
 echo "==> [beryl] Installation du base system dans /mnt (pkg --rootdir)"
+# NB pkgbase : la base est éclatée en paquets. Il FAUT inclure
+# explicitement le client DHCP (FreeBSD-dhclient) et resolvconf, sinon
+# `ifconfig_DEFAULT="DHCP"` dans rc.conf ne récupère aucune IP → serveur
+# booté mais MUET réseau (ping/SSH timeout). Constaté in vivo qgra (1er
+# boot bare-metal). dhclient/resolvconf ne sont les dépendances d'aucun
+# autre paquet de la liste → à nommer explicitement.
 pkg --rootdir /mnt install -y -r FreeBSD-base \
   FreeBSD-runtime \
   FreeBSD-clibs \
   FreeBSD-kernel-generic \
   FreeBSD-rc \
   FreeBSD-utilities \
+  FreeBSD-dhclient \
+  FreeBSD-resolvconf \
   FreeBSD-ssh \
   FreeBSD-dma \
   FreeBSD-bootloader \
