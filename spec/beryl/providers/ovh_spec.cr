@@ -80,6 +80,47 @@ describe Beryl::Providers::Ovh do
     end
   end
 
+  describe "#set_reverse" do
+    it "IPv6 : poste le reverse sur le BLOC /64 (path), l'adresse précise en ipReverse" do
+      # Régression terrain (qgra, 9 juin 2026) : OVH renvoyait 404
+      # « This service does not exist » sur POST /ip/{/128}/reverse. Le
+      # service IP est le bloc /64 routé, pas l'adresse individuelle.
+      transport = FakeOvhTransport.new
+      transport.stub(
+        "POST",
+        /ip\/.+\/reverse$/,
+        status: 200,
+        body: %({"ipReverse":"2001:41d0:306:2b67::1","reverse":"qgra.quimeo.net."}),
+      )
+      provider = Beryl::Providers::Ovh.new(build_fake_ovh_client(transport))
+      provider.set_reverse("2001:41d0:306:2b67::1", "qgra.quimeo.net")
+
+      req = transport.requests.find! { |r| r.method == "POST" }
+      # Bloc /64 dans le path (slash encodé %2F par le shard).
+      req.url.should contain("/ip/2001:41d0:306:2b67::%2F64/reverse")
+      req.url.should_not contain("::1/reverse")
+      # Adresse /128 dans le body + FQDN terminé par un point.
+      req.body.should contain(%("ipReverse":"2001:41d0:306:2b67::1"))
+      req.body.should contain(%("reverse":"qgra.quimeo.net."))
+    end
+
+    it "IPv4 : poste le reverse sur l'adresse elle-même (bloc == /32)" do
+      transport = FakeOvhTransport.new
+      transport.stub(
+        "POST",
+        /ip\/.+\/reverse$/,
+        status: 200,
+        body: %({"ipReverse":"51.83.6.208","reverse":"qgra.quimeo.net."}),
+      )
+      provider = Beryl::Providers::Ovh.new(build_fake_ovh_client(transport))
+      provider.set_reverse("51.83.6.208", "qgra.quimeo.net.")
+
+      req = transport.requests.find! { |r| r.method == "POST" }
+      req.url.should contain("/ip/51.83.6.208/reverse")
+      req.body.should contain(%("ipReverse":"51.83.6.208"))
+    end
+  end
+
   describe "#required_access_rules" do
     it "liste les routes OVH à injecter dans la consumer key générée" do
       rules = Beryl::Providers::Ovh.new.required_access_rules

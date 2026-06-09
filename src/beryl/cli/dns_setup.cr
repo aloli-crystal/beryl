@@ -121,6 +121,30 @@ module Beryl::CLI::DnsSetup
     end
   end
 
+  # Déduit le bloc /64 (préfixe réseau) d'une adresse IPv6. OVH gère le
+  # reverse au niveau du BLOC : pour une IPv6 l'API attend
+  # `POST /ip/{bloc /64}/reverse` avec l'adresse précise dans `ipReverse`,
+  # PAS l'adresse /128 dans le path (sinon 404 « This service does not
+  # exist » — le /128 n'est pas un service IP, seul le /64 routé l'est).
+  # En IPv4 le souci ne se pose pas : bloc == adresse (/32).
+  #
+  # Le /64 est exactement le réseau de n'importe quelle adresse du bloc
+  # (les 64 premiers bits), donc le dériver de l'adresse est exact — pas
+  # une devinette. Ex. `2001:41d0:306:2b67::1` → `2001:41d0:306:2b67::/64`.
+  def self.ipv6_block_64(address : String) : String
+    addr = address.split('/').first
+    if addr.includes?("::")
+      left, right = addr.split("::", 2)
+      left_groups = left.empty? ? [] of String : left.split(':')
+      right_groups = right.empty? ? [] of String : right.split(':')
+      zeros = 8 - left_groups.size - right_groups.size
+      groups = left_groups + Array.new(zeros, "0") + right_groups
+    else
+      groups = addr.split(':')
+    end
+    "#{groups.first(4).join(':')}::/64"
+  end
+
   # Exécute le plan. Chaque étape est idempotente.
   #
   # Ordre :
@@ -190,14 +214,15 @@ module Beryl::CLI::DnsSetup
     logger : Proc(String, Nil),
   ) : Nil
     target = reverse.ends_with?(".") ? reverse : "#{reverse}."
+    # IPv6 : OVH attend le BLOC /64 dans le path et l'adresse précise
+    # dans `ipReverse`. IPv4 : bloc == adresse (/32), on passe l'adresse.
+    path_ip = ip.includes?(':') ? ipv6_block_64(ip) : ip
     label = "reverse #{ip} → #{target} (attente propagation DNS si besoin)"
     Beryl.log_step("beryl scan", label) do
       attempt = 1
       loop do
         begin
-          # On ne connaît pas le bloc exact (v4 = /32, v6 = /64). Le
-          # shard ovh-api gère l'endpoint /ip/{ip}/reverse.
-          client.ips.set_reverse(ip: ip, reverse: target, ip_reverse: ip)
+          client.ips.set_reverse(ip: path_ip, reverse: target, ip_reverse: ip)
           break # succès
         rescue ex : OvhApi::Error
           msg = ex.message.to_s.downcase

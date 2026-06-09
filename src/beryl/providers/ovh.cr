@@ -1,4 +1,5 @@
 require "../cli/credentials"
+require "../cli/dns_setup"
 
 module Beryl::Providers
   # Provider OVHcloud pour beryl. Encapsule la détection des credentials
@@ -43,7 +44,17 @@ module Beryl::Providers
 
     def set_reverse(ip : String, reverse : String) : Nil
       target = reverse.ends_with?(".") ? reverse : "#{reverse}."
-      client.ips.set_reverse(ip: ip, reverse: target, ip_reverse: ip)
+      # IPv6 : OVH gère le reverse au niveau du BLOC /64 — le path doit
+      # porter le bloc, `ipReverse` l'adresse précise (sinon 404 « service
+      # does not exist » sur le /128). IPv4 : bloc == adresse (/32).
+      #
+      # Le `/` du bloc (`…::/64`) est un séparateur de path : il DOIT être
+      # encodé `%2F`, sinon OVH lit `/ip/…::/64/reverse` comme un segment
+      # de trop et renvoie 404. Le shard insère le `ip:` brut → on encode
+      # ici. (`ipv6_block_64` garde le `/` nu : sa valeur sert aussi de
+      # libellé lisible et est testée telle quelle.)
+      path_ip = ip.includes?(':') ? Beryl::CLI::DnsSetup.ipv6_block_64(ip).gsub('/', "%2F") : ip
+      client.ips.set_reverse(ip: path_ip, reverse: target, ip_reverse: ip)
     end
 
     def set_display_name(resource_id : String, new_name : String) : Nil
