@@ -5,8 +5,8 @@ shards:
     version: 0.1.6+git.commit.2906a0e81cd38b3ab8ce4c5ad6d9f9972a4a1cbf
 
   api-gandi:
-    path: ../api-gandi
-    version: 0.1.0
+    git: https://github.com/aloli-crystal/api-gandi.git
+    version: 0.1.0+git.commit.36e5582b4224b41b99ca59e2aed5ee44678a1dd8
 
   api-ovh:
     git: https://github.com/aloli-crystal/api-ovh.git

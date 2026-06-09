@@ -27,7 +27,8 @@ dependencies:
     github: aloli-crystal/api-dedibox
     branch: production
   api-gandi:
-    path: ../api-gandi
+    github: aloli-crystal/api-gandi
+    branch: production
   load-env:
     github: aloli-crystal/load-env
     branch: production
