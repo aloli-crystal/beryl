@@ -55,37 +55,47 @@ echo "==> [beryl] Monte EFI"
 mkdir -p /mnt/boot/efi
 mount -t msdosfs /dev/gpt/efi /mnt/boot/efi
 
-echo "==> [beryl] Bootstrap pkg dans /mnt"
-mkdir -p /mnt/usr/local/etc/pkg/repos
-cat > /mnt/usr/local/etc/pkg/repos/FreeBSD-base.conf <<'REPO'
+echo "==> [beryl] Repo FreeBSD-base côté hôte d'install (mfsBSD)"
+# On installe le base system dans /mnt via `pkg --rootdir` (no-chroot,
+# conforme ADR-013) : pkg s'exécute sur l'hôte d'install (qui a un ABI
+# valide et les clés pkgbase), et dépose les paquets dans /mnt. On NE
+# PEUT PAS faire `pkg -c /mnt` (chroot) car /mnt est vide → pkg n'y
+# trouve aucun ABI_FILE (« Unable to determine the ABI ») — validé sur
+# le banc QEMU. Le repo conf et les fingerprints vivent donc côté hôte.
+mkdir -p /usr/local/etc/pkg/repos
+cat > /usr/local/etc/pkg/repos/FreeBSD-base.conf <<'REPO'
 FreeBSD-base: {
   url: "pkg+https://pkg.freebsd.org/${ABI}/base_release_0",
   mirror_type: "srv",
   signature_type: "fingerprints",
-  fingerprints: "/usr/share/keys/pkg",
+  # Clés du BASE (cf. /etc/pkg/FreeBSD.conf de 15.0-RELEASE), PAS
+  # /usr/share/keys/pkg (= clés des PORTS). `${VERSION_MAJOR}` → 15.
+  fingerprints: "/usr/share/keys/pkgbase-${VERSION_MAJOR}",
   enabled: yes
 }
 REPO
 
-fetch -o /tmp/FreeBSD-pkg-bootstrap.pkg \
-  "https://pkg.freebsd.org/${ABI}/base_release_0/FreeBSD-pkg-bootstrap-15.0.pkg"
+echo "==> [beryl] Copie des clés pkgbase dans la cible"
+# `pkg --rootdir /mnt` résout le chemin `fingerprints` RELATIVEMENT à
+# /mnt → il cherche /mnt/usr/share/keys/pkgbase-<maj>/trusted. On copie
+# donc les clés de l'hôte d'install dans la cible (validé sur le banc :
+# sans ça, « Error opening the trusted directory »).
+VMAJ=$(uname -r | cut -d. -f1)
+mkdir -p /mnt/usr/share/keys
+cp -R "/usr/share/keys/pkgbase-${VMAJ}" /mnt/usr/share/keys/
 
-pkg -c /mnt add -f /tmp/FreeBSD-pkg-bootstrap.pkg
-
-echo "==> [beryl] Installation des paquets FreeBSD-base (pkgbase)"
-env ABI="${ABI}" pkg -c /mnt install -y \
+echo "==> [beryl] Installation du base system dans /mnt (pkg --rootdir)"
+pkg --rootdir /mnt install -y -r FreeBSD-base \
   FreeBSD-runtime \
+  FreeBSD-clibs \
   FreeBSD-kernel-generic \
   FreeBSD-rc \
-  FreeBSD-libexec \
-  FreeBSD-libcompat \
-  FreeBSD-openssh-server \
-  FreeBSD-openssh \
+  FreeBSD-utilities \
+  FreeBSD-ssh \
   FreeBSD-dma \
   FreeBSD-bootloader \
   FreeBSD-zfs \
-  FreeBSD-fetch \
-  FreeBSD-pkg
+  FreeBSD-fetch
 
 echo "==> [beryl] Configuration /boot/loader.conf"
 cat > /mnt/boot/loader.conf <<'LOADER'
@@ -131,8 +141,16 @@ ChallengeResponseAuthentication no
 SSHD
 
 echo "==> [beryl] Installation du bootloader EFI"
+# Nom du fallback EFI selon l'architecture (BOOTX64 sur amd64,
+# BOOTAA64 sur arm64) — sinon le firmware UEFI ne trouve pas le
+# loader. Validé sur le banc QEMU aarch64.
+case "$(uname -m)" in
+  amd64) EFI_FALLBACK="BOOTX64.EFI" ;;
+  arm64 | aarch64) EFI_FALLBACK="BOOTAA64.EFI" ;;
+  *) EFI_FALLBACK="BOOTX64.EFI" ;;
+esac
 mkdir -p /mnt/boot/efi/EFI/FreeBSD /mnt/boot/efi/EFI/BOOT
-cp /mnt/boot/loader.efi /mnt/boot/efi/EFI/BOOT/BOOTX64.EFI
+cp /mnt/boot/loader.efi "/mnt/boot/efi/EFI/BOOT/${EFI_FALLBACK}"
 cp /mnt/boot/loader.efi /mnt/boot/efi/EFI/FreeBSD/loader.efi
 
 echo "==> [beryl] Verrouillage du dataset racine"
