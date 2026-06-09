@@ -77,9 +77,13 @@ module Beryl::CLI::Wipe
       end
     end
 
+    # Le rescue est TOUJOURS joignable en root (cf. bootstrap.cr) —
+    # INDÉPENDAMMENT de host.user (qui désigne l'utilisateur du serveur
+    # installé, ex. admin). Sans ça, `user: admin` cassait wipe
+    # (admin@rescue → uname -s vide → « pas sur un rescue Linux »).
     rescue_conn = SSH::Connection.new(
       host: host.ssh_host,
-      user: host.user,
+      user: "root",
       port: host.port,
       identity_file: host.identity_file,
       options: {

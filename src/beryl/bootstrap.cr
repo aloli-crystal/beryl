@@ -1,12 +1,12 @@
 require "./bootstrap/mfsbsd_release"
 require "./bootstrap/qemu_in_rescue"
 
-# Les classes ci-dessous restent dispo pour les tests et le support
-# Legacy BIOS éventuel, mais ne sont plus sur le chemin principal.
-# Voir ADR-010 (ARCHITECTURE.adoc) pour le contexte et ADR-011 pour la
-# nouvelle voie (Beryl::Bootstrap::QemuInRescue).
+# `MfsBSD` reste dispo (legacy, plus sur le chemin principal). La classe
+# `Installer` (mono-disque) a été RETIRÉE : elle dupliquait le rendu de
+# `install-pkgbase.sh` et est devenue incompatible avec le template
+# multi-disque (Phase 2). La voie unique est `QemuInRescue`.
+# Voir ADR-010 (ARCHITECTURE.adoc) et ADR-011.
 require "./bootstrap/mfsbsd"
-require "./bootstrap/installer"
 
 module Beryl
   # Bootstrap complet : Linux rescue → FreeBSD 15 installé UEFI-compatible.

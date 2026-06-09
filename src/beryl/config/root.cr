@@ -716,5 +716,19 @@ module Beryl::Config
         identity_file: identity_file,
       )
     end
+
+    # Connexion au rescue Linux : TOUJOURS root, INDÉPENDAMMENT de `user`
+    # (qui désigne l'utilisateur du serveur INSTALLÉ, ex. admin). Toute
+    # commande qui parle au rescue (scan, wipe, bootstrap…) doit l'utiliser
+    # plutôt que `connection`, sinon `user: admin` casse l'accès (le rescue
+    # n'a que root).
+    def rescue_connection : SSH::Connection
+      SSH::Connection.new(
+        host: ssh_host,
+        user: "root",
+        port: port,
+        identity_file: identity_file,
+      )
+    end
   end
 end

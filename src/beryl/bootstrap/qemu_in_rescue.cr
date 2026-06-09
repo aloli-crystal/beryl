@@ -252,17 +252,12 @@ module Beryl::Bootstrap
           seen_disks << d
         end
       end
-      # pkgbase (install_type: packages) — Phase 1 : mono-disque,
-      # root-only (le script install-pkgbase.sh ne couvre pas encore
-      # RAID, pools data, packages additionnels ni users non-root).
-      # On REFUSE explicitement ces cas plutôt que de les ignorer en
-      # silence (règle Aloli). Voir pkgbase-install-architecture.adoc.
-      if @install_type == "packages"
-        raise PkgbaseScopeUnsupported.new("install_type: packages — Phase 1 ne gère qu'un seul disque (reçu #{@disks.size}).") if @disks.size > 1
-        raise PkgbaseScopeUnsupported.new("install_type: packages — Phase 1 ne gère pas les pools data.") unless @data_pools.empty?
-        raise PkgbaseScopeUnsupported.new("install_type: packages — Phase 1 ne gère pas le RAID (utilisez raid: stripe).") unless @raid == "stripe"
-        raise PkgbaseScopeUnsupported.new("install_type: packages — Phase 1 ne gère pas les packages additionnels (#{@packages.join(", ")}). Posez-les via beryl apply après bootstrap.") unless @packages.empty?
-      end
+      # pkgbase (install_type: packages) — Phase 2 : PARITÉ COMPLÈTE avec
+      # tarball. install-pkgbase.sh gère multi-disque + RAID + pools data,
+      # crée les users (groupes + clés + sudo), installe les packages, et
+      # COUPE le SSH root d'emblée (PermitRootLogin no — exigence sécurité
+      # Aloli : aucun accès root, même transitoire). Plus aucune
+      # restriction de périmètre.
       @users.each(&.validate!)
 
       @mfsbsd_url = iso_url || self.class.default_mfsbsd_url(@mfsbsd_version)
@@ -381,26 +376,42 @@ module Beryl::Bootstrap
         .gsub("__INSTALL_PKGBASE_PATH__", INSTALL_PKGBASE_PATH)
     end
 
-    # Rend le script d'install pkgbase (autonome). La cible est
-    # /dev/vtbd1 dans la VM QEMU (vtbd0 = mfsBSD, le disque cible est le
-    # premier disque passthrough). Phase 1 : mono-disque, clés root =
-    # union des clés SSH des users déclarés.
+    # Rend le script d'install pkgbase (autonome). Multi-disque (Phase 2) :
+    # le pool boot s'étend sur vtbd1..vtbd(N) (N = @disks.size ; vtbd0 =
+    # mfsBSD), assemblés selon @raid (stripe/mirror/raidz…). Les pools
+    # data (vtbd(N+1)..) sont créés via le même `data_pools_script` que le
+    # chemin tarball (mapping vtbd, cachefile, chiffrement réutilisés).
+    # Clés root = union des clés SSH des users déclarés.
     def render_install_pkgbase : String
+      boot_disks = (1..@disks.size).map { |i| "/dev/vtbd#{i}" }.join(" ")
       TEMPLATE_INSTALL_PKGBASE
-        .gsub("__TARGET_DISK__", "/dev/vtbd1")
+        .gsub("__BOOT_DISKS__", boot_disks)
+        .gsub("__BOOT_RAID__", @raid)
         .gsub("__POOL_NAME__", @pool_name)
         .gsub("__HOSTNAME__", @hostname)
         .gsub("__ABI__", @abi)
         .gsub("__SWAP_GB__", @swap_gb.to_s)
         .gsub("__TIMEZONE__", @timezone)
-        .gsub("__AUTHORIZED_KEYS_B64__", pkgbase_root_keys_b64)
+        .gsub("__USERS_TSV_B64__", pkgbase_users_tsv_b64)
+        .gsub("__PACKAGES__", @packages.join(" "))
+        .gsub("__SUDOERS_B64__", pkgbase_sudoers_b64)
+        .gsub("__DATA_POOLS_SCRIPT_B64__", data_pools_script_b64)
     end
 
-    # Union des clés SSH des users, encodée base64 pour /root/.ssh/
-    # authorized_keys (accès root post-install en Phase 1 pkgbase).
-    private def pkgbase_root_keys_b64 : String
-      keys = @users.flat_map(&.ssh_keys).uniq
-      Base64.strict_encode(keys.join("\n") + "\n")
+    # Users encodés en TSV (name|pgroup|sgroups|shell|key1,key2 par ligne),
+    # base64 pour éviter tout souci de quoting des clés. install-pkgbase.sh
+    # crée chaque user (groupes + clés + sudo) au bootstrap — AUCUN accès
+    # root SSH n'est posé (PermitRootLogin no) : l'accès passe uniquement
+    # par les users + sudo (exigence sécurité Aloli).
+    private def pkgbase_users_tsv_b64 : String
+      Base64.strict_encode(@users.map(&.to_tsv).join("\n") + "\n")
+    end
+
+    # Contenu sudoers (ex. "%wheel ALL=(ALL) NOPASSWD:ALL"), base64. Vide
+    # si aucun (install-pkgbase.sh saute alors le bloc).
+    private def pkgbase_sudoers_b64 : String
+      return "" if @sudoers.empty?
+      Base64.strict_encode(@sudoers.join("\n") + "\n")
     end
 
     # Ordre global des disques passés à QEMU : boot d'abord, puis pools
