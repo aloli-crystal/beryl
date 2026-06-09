@@ -7,6 +7,7 @@ require "./cli/boot_hd"
 require "./cli/wipe"
 require "./cli/apply"
 require "./cli/scan"
+require "./cli/dns"
 require "./cli/init"
 require "./cli/add_provider"
 require "./cli/add_domain"
@@ -120,6 +121,7 @@ module Beryl::CLI
     when "bootstrap"          then Beryl::CLI::Bootstrap.run(config_root, sub_args)
     when "follow-install"     then Beryl::CLI::FollowInstall.run(config_root, sub_args)
     when "scan"               then Beryl::CLI::Scan.run(config_root, sub_args)
+    when "dns"                then Beryl::CLI::Dns.run(config_root, sub_args)
     when "apply"              then Beryl::CLI::Apply.run(config_root, sub_args)
     when "prep-rescue"        then Beryl::CLI::PrepRescue.run(sub_args)
     when "bake-seed"          then Beryl::CLI::BakeSeed.run(sub_args)
@@ -205,6 +207,7 @@ module Beryl::CLI
     when "bootstrap"      then Beryl::CLI::Bootstrap.run(config_root, ["--help"])
     when "follow-install" then Beryl::CLI::FollowInstall.run(config_root, ["--help"])
     when "scan"           then Beryl::CLI::Scan.run(config_root, ["--help"])
+    when "dns"            then Beryl::CLI::Dns.run(config_root, ["--help"])
     when "apply"          then Beryl::CLI::Apply.run(config_root, ["--help"])
     when "prep-rescue"    then Beryl::CLI::PrepRescue.run(["--help"])
     when "bake-seed"      then Beryl::CLI::BakeSeed.run(["--help"])
@@ -245,6 +248,7 @@ module Beryl::CLI
       wipe          [w]     Efface un disque sur un hôte en rescue
       bootstrap     [b]     Installe FreeBSD 15 (mfsBSD-in-QEMU)
       scan          [s]     Détecte les disques et propose un YAML host
+      dns                   Pose les records DNS (forward via dns_provider + reverse)
       apply         [a]     Synchronise packages/users/clés SSH
       prep-rescue   [pr]    HTTP local pour préparer un rescue Debian
       bake-seed     [bs]    cloud-init seed.img pour Ubuntu Server live
