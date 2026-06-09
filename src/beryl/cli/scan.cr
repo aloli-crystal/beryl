@@ -849,10 +849,9 @@ module Beryl::CLI::Scan
   # Variante Dedibox du flux `--dns`. Différences :
   #   - IPs + current_hostname viennent de l'API Dedibox
   #     (`GET /server/{id}`), pas OVH.
-  #   - records A/AAAA posés via le DNS provider de la zone
-  #     (typiquement OVH côté Aloli si la zone aloli.net y est
-  #     hébergée). On réutilise `DnsSetup.ensure_record` /
-  #     `refresh_zone`.
+  #   - records A/AAAA posés via le dns_provider RÉEL de la zone
+  #     (OVH, Gandi… selon `host.dns_provider`), via
+  #     `DnsApply.forward_via_dns_provider`.
   #   - rename console : `DediboxApi::Client.servers.update_hostname`
   #     (API validée live 24 avril 2026).
   #   - reverse DNS : **skip**, l'API Dedibox ne l'expose pas.
@@ -918,17 +917,12 @@ module Beryl::CLI::Scan
       raise Aborted.new unless ans.downcase.starts_with?("o") || ans.downcase.starts_with?("y")
     end
 
-    # Records DNS via le DNS provider (OVH côté Aloli aujourd'hui).
-    # Beryl instancie un client OVH pour poser les records A/AAAA
-    # dans la zone aloli.net. Si la zone était ailleurs (Gandi…),
-    # il faudrait une abstraction DnsProvider — pas encore câblée.
-    ovh = Beryl::CLI::Credentials.ovh_client
+    # Forward A/AAAA via le dns_provider RÉEL de la zone (multi-provider) :
+    # OVH, Gandi… selon `host.dns_provider`. Plus de hardcode OVH (la zone
+    # pouvait être hébergée ailleurs → 404). Le reverse Dedibox reste
+    # manuel (l'API ne l'expose pas, cf. plan ci-dessus).
     logger = Proc(String, Nil).new { |m| log(m); nil }
-    Beryl::CLI::DnsSetup.ensure_record(ovh, zone, "A", short, ipv4, logger)
-    if v6 = ipv6
-      Beryl::CLI::DnsSetup.ensure_record(ovh, zone, "AAAA", short, v6, logger)
-    end
-    Beryl::CLI::DnsSetup.refresh_zone(ovh, zone, logger)
+    Beryl::CLI::DnsApply.forward_via_dns_provider(host, zone, short, ipv4, ipv6, logger)
 
     # Rename côté console Dedibox (via PUT /server/{id}).
     if current_hostname != short
@@ -946,8 +940,8 @@ module Beryl::CLI::Scan
   #     (`client.baremetal.servers.get(uuid, zone)`). Si la zone
   #     n'est pas fournie explicitement (cas d'un UUID brut venu
   #     du shortcut), on la retrouve via `find_any_zone`.
-  #   - Records A/AAAA posés via le DNS provider de la zone
-  #     (OVH côté Aloli). Même code que Dedibox.
+  #   - Records A/AAAA posés via le dns_provider RÉEL de la zone
+  #     (OVH, Gandi…). Même code que Dedibox (`forward_via_dns_provider`).
   #   - Rename console : `client.baremetal.servers.update(name:)`.
   #     Scaleway n'a pas de séparation « nom système / nom console »
   #     comme Dedibox : le `name` sert de nom d'affichage dans la
@@ -1036,16 +1030,11 @@ module Beryl::CLI::Scan
       raise Aborted.new unless ans.downcase.starts_with?("o") || ans.downcase.starts_with?("y")
     end
 
-    # Records DNS via le DNS provider (OVH côté Aloli aujourd'hui).
-    # Même logique que Dedibox : si la zone est ailleurs qu'OVH, il
-    # faudra une abstraction DnsProvider — pas encore câblée.
-    ovh = Beryl::CLI::Credentials.ovh_client
+    # Forward A/AAAA via le dns_provider RÉEL de la zone (multi-provider) :
+    # OVH, Gandi… selon `host.dns_provider`. Le reverse + rename ci-dessous
+    # restent spécifiques au compute Scaleway (API baremetal).
     logger = Proc(String, Nil).new { |m| log(m); nil }
-    Beryl::CLI::DnsSetup.ensure_record(ovh, dns_zone, "A", short, ipv4, logger)
-    if v6 = ipv6
-      Beryl::CLI::DnsSetup.ensure_record(ovh, dns_zone, "AAAA", short, v6, logger)
-    end
-    Beryl::CLI::DnsSetup.refresh_zone(ovh, dns_zone, logger)
+    Beryl::CLI::DnsApply.forward_via_dns_provider(host, dns_zone, short, ipv4, ipv6, logger)
 
     # Rename + reverse IPv4 via un PATCH global sur l'API Scaleway.
     # `servers.update(reverse:)` ne s'applique qu'à l'IP primaire

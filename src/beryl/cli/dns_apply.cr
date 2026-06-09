@@ -60,6 +60,42 @@ module Beryl::CLI
     # Ne lève PAS sur un échec de forward : retourne `Outcome::Failed`.
     # L'appelant décide si c'est bloquant (`beryl dns`) ou best-effort
     # (`scan --dns`).
+    # Pose le forward A/AAAA via le dns_provider RÉEL de la zone
+    # (`host.dns_provider`), puis refresh. C'est la brique multi-provider
+    # du forward, partagée : `for_host` l'utilise pour le chemin OVH, et
+    # les flux compute-spécifiques de `scan` (scaleway/dedibox, qui font
+    # leur propre détection d'IP) l'appellent au lieu de hardcoder OVH.
+    #
+    # Lève si `dns_provider` est absent / sans capability `:dns`, ou sur
+    # échec d'un `ensure_record` — l'appelant décide du caractère bloquant
+    # (dans `scan`, tout le DNS est best-effort).
+    def forward_via_dns_provider(
+      host : Beryl::Config::ResolvedHost,
+      zone : String,
+      short : String,
+      ipv4 : String,
+      ipv6 : String?,
+      log : Proc(String, Nil),
+    ) : Nil
+      dns_provider_name = host.dns_provider
+      if dns_provider_name.nil? || dns_provider_name.empty?
+        raise "aucun `dns_provider` pour #{host.fqdn} (déclarez-le dans le .domain.yml)"
+      end
+      dns_prov = Beryl::Providers.find(dns_provider_name)
+      unless dns_prov && dns_prov.capable_of?(:dns)
+        raise "`#{dns_provider_name}` n'est pas un DNS provider (capability :dns absente)"
+      end
+      # `capable_of?(:dns)` garantit l'inclusion du mixin → cast sûr.
+      fwd = dns_prov.as(Beryl::DnsProvider)
+      fwd.ensure_record(zone, "A", short, ipv4)
+      log.call("✓ A    #{short}.#{zone} → #{ipv4} (#{dns_provider_name})")
+      if v6 = ipv6
+        fwd.ensure_record(zone, "AAAA", short, v6)
+        log.call("✓ AAAA #{short}.#{zone} → #{v6} (#{dns_provider_name})")
+      end
+      fwd.refresh_zone(zone)
+    end
+
     def for_host(
       host : Beryl::Config::ResolvedHost,
       hostname_flag : String?,

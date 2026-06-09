@@ -48,12 +48,9 @@ module Beryl::Providers
       # porter le bloc, `ipReverse` l'adresse précise (sinon 404 « service
       # does not exist » sur le /128). IPv4 : bloc == adresse (/32).
       #
-      # Le `/` du bloc (`…::/64`) est un séparateur de path : il DOIT être
-      # encodé `%2F`, sinon OVH lit `/ip/…::/64/reverse` comme un segment
-      # de trop et renvoie 404. Le shard insère le `ip:` brut → on encode
-      # ici. (`ipv6_block_64` garde le `/` nu : sa valeur sert aussi de
-      # libellé lisible et est testée telle quelle.)
-      path_ip = ip.includes?(':') ? Beryl::CLI::DnsSetup.ipv6_block_64(ip).gsub('/', "%2F") : ip
+      # L'encodage du `/` du bloc (`…::/64` → `%2F`) est fait par le shard
+      # api-ovh ≥ 0.7.3 (`encode_ip`) — on lui passe le bloc nu.
+      path_ip = ip.includes?(':') ? Beryl::CLI::DnsSetup.ipv6_block_64(ip) : ip
       client.ips.set_reverse(ip: path_ip, reverse: target, ip_reverse: ip)
     end
 
