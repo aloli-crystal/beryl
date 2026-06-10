@@ -298,7 +298,7 @@ module Beryl::Config
     end
 
     private def build_resolved(account : Account, domain : Domain, group : Group?, node : HostNode) : ResolvedHost
-      merged = Merger.merge(@defaults, domain, group, node, ssh_dir: @ssh_dir)
+      merged = Merger.merge(@defaults, account.metadata, domain, group, node, ssh_dir: @ssh_dir)
       ResolvedHost.new(
         short_name: node.name,
         account: account,
@@ -319,7 +319,7 @@ module Beryl::Config
         raw: {} of YAML::Any => YAML::Any,
         source_path: "<virtual>",
       )
-      merged = Merger.merge(@defaults, domain, nil, virtual_node, ssh_dir: @ssh_dir)
+      merged = Merger.merge(@defaults, account.metadata, domain, nil, virtual_node, ssh_dir: @ssh_dir)
       ResolvedHost.new(
         short_name: short_name,
         account: account,

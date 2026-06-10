@@ -2,6 +2,10 @@ require "../../spec_helper"
 require "../../../src/beryl/config"
 require "yaml"
 
+# Métadonnées société (_account.yml) vides pour les tests qui ne testent
+# pas le niveau société.
+private EMPTY_META = {} of YAML::Any => YAML::Any
+
 # Helpers de construction manuelle (pas besoin de passer par le disque).
 private def hash_from_yaml(yaml : String) : Hash(YAML::Any, YAML::Any)
   YAML.parse(yaml).as_h
@@ -38,7 +42,7 @@ describe Beryl::Config::Merger do
         raid: mirror
       YAML
 
-      merged = Beryl::Config::Merger.merge(defaults, d, nil, h)
+      merged = Beryl::Config::Merger.merge(defaults, EMPTY_META, d, nil, h)
       fb = merged[YAML::Any.new("freebsd")].as_h
       fb[YAML::Any.new("timezone")].as_s.should eq("Europe/Paris") # de _default
       fb[YAML::Any.new("swap_gb")].as_i.should eq(4)               # de domaine
@@ -61,7 +65,7 @@ describe Beryl::Config::Merger do
         packages: [redis, sudo]
       YAML
 
-      merged = Beryl::Config::Merger.merge(defaults, d, g, h)
+      merged = Beryl::Config::Merger.merge(defaults, EMPTY_META, d, g, h)
       packages = merged[YAML::Any.new("freebsd")].as_h[YAML::Any.new("packages")].as_a.map(&.as_s)
       packages.should eq(["sudo", "zsh", "curl", "git", "nginx", "postgresql16-server", "redis"])
       # `sudo` dédupé
@@ -78,9 +82,27 @@ describe Beryl::Config::Merger do
         disks: [/dev/sdc, /dev/sdd]
       YAML
 
-      merged = Beryl::Config::Merger.merge(defaults, d, nil, h)
+      merged = Beryl::Config::Merger.merge(defaults, EMPTY_META, d, nil, h)
       disks = merged[YAML::Any.new("freebsd")].as_h[YAML::Any.new("disks")].as_a.map(&.as_s)
       disks.should eq(["/dev/sdc", "/dev/sdd"])
+    end
+
+    it "cascade apply_recipes : société (_account.yml) + domaine + host s'additionnent" do
+      defaults = hash_from_yaml("os: freebsd\n")
+      account_meta = hash_from_yaml("apply_recipes: [ssh-hardening]\n")
+      d = domain(<<-YAML)
+      ssh_keys: ['ssh-ed25519 AAAA k']
+      apply_recipes: [ruby]
+      YAML
+      h = host_node(<<-YAML)
+      freebsd:
+        hostname: x
+      apply_recipes: [headscale-node]
+      YAML
+
+      merged = Beryl::Config::Merger.merge(defaults, account_meta, d, nil, h)
+      recipes = merged[YAML::Any.new("apply_recipes")].as_a.map(&.as_s)
+      recipes.should eq(["ssh-hardening", "ruby", "headscale-node"])
     end
   end
 
@@ -104,7 +126,7 @@ describe Beryl::Config::Merger do
       YAML
       h = host_node("freebsd:\n  hostname: x\n")
 
-      merged = Beryl::Config::Merger.merge(defaults, d, nil, h)
+      merged = Beryl::Config::Merger.merge(defaults, EMPTY_META, d, nil, h)
       users = merged[YAML::Any.new("freebsd")].as_h[YAML::Any.new("users")].as_a
 
       users.size.should eq(2)
@@ -135,7 +157,7 @@ describe Beryl::Config::Merger do
               - ssh-ed25519 AAAA dev3@aloli.fr
       YAML
 
-      merged = Beryl::Config::Merger.merge(defaults, d, nil, h)
+      merged = Beryl::Config::Merger.merge(defaults, EMPTY_META, d, nil, h)
       deploy = merged[YAML::Any.new("freebsd")].as_h[YAML::Any.new("users")].as_a
         .find! { |u| u.as_h[YAML::Any.new("name")].as_s == "deploy" }
       keys = deploy.as_h[YAML::Any.new("ssh_keys")].as_a.map(&.as_s)
@@ -166,7 +188,7 @@ describe Beryl::Config::Merger do
               - ssh-ed25519 AAAA autre@aloli.fr
       YAML
 
-      merged = Beryl::Config::Merger.merge(defaults, d, nil, h)
+      merged = Beryl::Config::Merger.merge(defaults, EMPTY_META, d, nil, h)
       admin = merged[YAML::Any.new("freebsd")].as_h[YAML::Any.new("users")].as_a.first
       keys = admin.as_h[YAML::Any.new("ssh_keys")].as_a.map(&.as_s)
 
@@ -203,8 +225,8 @@ describe Beryl::Config::Merger do
               - ssh-ed25519 AAAA dev2
       YAML
 
-      v1 = Beryl::Config::Merger.merge(defaults, d, nil, h_v1)
-      v2 = Beryl::Config::Merger.merge(defaults, d, nil, h_v2)
+      v1 = Beryl::Config::Merger.merge(defaults, EMPTY_META, d, nil, h_v1)
+      v2 = Beryl::Config::Merger.merge(defaults, EMPTY_META, d, nil, h_v2)
 
       v1_keys = v1[YAML::Any.new("freebsd")].as_h[YAML::Any.new("users")].as_a.first.as_h[YAML::Any.new("ssh_keys")].as_a.map(&.as_s)
       v2_keys = v2[YAML::Any.new("freebsd")].as_h[YAML::Any.new("users")].as_a.first.as_h[YAML::Any.new("ssh_keys")].as_a.map(&.as_s)

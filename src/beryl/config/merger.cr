@@ -33,6 +33,7 @@ module Beryl::Config
     # commence par `ssh-`).
     def self.merge(
       defaults : Hash(YAML::Any, YAML::Any),
+      account_meta : Hash(YAML::Any, YAML::Any),
       domain : Domain,
       group : Group?,
       host : HostNode,
@@ -40,6 +41,11 @@ module Beryl::Config
     ) : Hash(YAML::Any, YAML::Any)
       result = {} of YAML::Any => YAML::Any
       result = deep_merge(result, defaults, path: "")
+      # Niveau SOCIÉTÉ (`<société>/_account.yml`) : entre le défaut global
+      # et le domaine. C'est là qu'on déclare les `apply_recipes:` communs
+      # à tous les hosts d'une société (le défaut global ne peut pas, il
+      # n'est dans aucun dépôt de config société).
+      result = deep_merge(result, account_meta, path: "")
       result = deep_merge(result, domain.raw, path: "")
       result = deep_merge(result, group.raw, path: "") if group
       result = deep_merge(result, host.raw, path: "")
