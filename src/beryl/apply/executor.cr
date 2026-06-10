@@ -87,6 +87,9 @@ module Beryl::Apply
     # concrets. Seuls les scalaires string sont retenus (Phase 1).
     private def build_vars(recipe : Recipe) : Hash(String, String)
       vars = {} of String => String
+      # Variables built-in de beryl (société, fqdn…) d'abord : disponibles
+      # partout, surchargeables par les parameters/arguments de la recette.
+      @context.vars.each { |k, v| vars[k] = v }
       recipe.parameters.each do |key, decl|
         if dh = decl.as_h?
           if default = dh[YAML::Any.new("default")]?.try(&.as_s?)

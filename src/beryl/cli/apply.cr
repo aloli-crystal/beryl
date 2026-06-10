@@ -99,7 +99,15 @@ module Beryl::CLI::Apply
     end
 
     shell = Beryl::Apply::SshShell.new(conn)
-    context = Beryl::Apply::Context.new(protected_keys: connecting_pubkeys(host))
+    context = Beryl::Apply::Context.new(
+      protected_keys: connecting_pubkeys(host),
+      vars: {
+        "company"  => host.account_name,
+        "fqdn"     => host.fqdn,
+        "hostname" => host.short_name,
+        "domain"   => host.domain_name,
+      },
+    )
     report = Beryl::Apply::Executor.new(shell, dry_run, context).run(recipes)
 
     log "apply terminé pour #{host.fqdn}#{dry_run ? " (dry-run)" : ""} — #{report.summary_line}"

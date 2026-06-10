@@ -52,3 +52,29 @@ describe Beryl::Apply::ServiceDisable do
     result.outcome.should eq(Beryl::Apply::Outcome::Skipped)
   end
 end
+
+describe Beryl::Apply::ServiceReload do
+  it "recharge un service démarré" do
+    shell = FakeShell.new
+    shell.stub(/service sshd onestatus/, exit_code: 0)
+    result = prim("service-reload").apply(shell, apply_params("name: sshd"), dry_run: false, context: ctx)
+    result.outcome.should eq(Beryl::Apply::Outcome::Applied)
+    shell.ran?(/service sshd reload/).should be_true
+  end
+
+  it "skip (ne recharge pas) si le service n'est pas démarré" do
+    shell = FakeShell.new
+    shell.stub(/service sshd onestatus/, exit_code: 1)
+    result = prim("service-reload").apply(shell, apply_params("name: sshd"), dry_run: false, context: ctx)
+    result.outcome.should eq(Beryl::Apply::Outcome::Skipped)
+    shell.ran?(/service sshd reload/).should be_false
+  end
+
+  it "ne recharge pas en dry-run" do
+    shell = FakeShell.new
+    shell.stub(/service sshd onestatus/, exit_code: 0)
+    result = prim("service-reload").apply(shell, apply_params("name: sshd"), dry_run: true, context: ctx)
+    result.outcome.should eq(Beryl::Apply::Outcome::Applied)
+    shell.ran?(/service sshd reload/).should be_false
+  end
+end

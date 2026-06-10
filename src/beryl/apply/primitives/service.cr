@@ -90,6 +90,30 @@ module Beryl::Apply
     end
   end
 
+  # Primitive `service-reload` : `service <svc> reload` — recharge la conf
+  # d'un service SANS couper les sessions en cours (≠ restart). Usage type :
+  # après une recette qui modifie sshd_config / nginx.conf. Skip si le
+  # service n'est pas démarré (rien à recharger).
+  #
+  #     - service-reload:
+  #         name: sshd
+  class ServiceReload < ServicePrimitive
+    def name : String
+      "service-reload"
+    end
+
+    def apply(shell : Shell, params : Hash(String, YAML::Any), dry_run : Bool, context : Context) : StepResult
+      svc = required_string(params, "name")
+      unless running?(shell, svc)
+        return StepResult.skipped("#{svc} non démarré → rien à recharger")
+      end
+      return StepResult.applied("#{svc} : reload (dry-run)") if dry_run
+      shell.exec("service #{Process.quote(svc)} reload")
+      StepResult.applied("#{svc} : reload")
+    end
+  end
+
   Primitive.register(ServiceEnable.new)
   Primitive.register(ServiceDisable.new)
+  Primitive.register(ServiceReload.new)
 end

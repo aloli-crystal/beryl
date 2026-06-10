@@ -22,7 +22,12 @@ module Beryl::Apply
   #   connecter (dérivées de `host.identity_file`). La primitive
   #   `user-update-keys` refuse de les retirer — garde-fou pour ne pas
   #   se couper la branche sur laquelle on est assis en plein apply.
-  record Context, protected_keys : Array(String) = [] of String
+  # * `vars` : variables built-in fournies par beryl (société/`company`,
+  #   `fqdn`, `hostname`, `domain`…), interpolables `{{ … }}` dans toutes
+  #   les recettes — ex. `VersionAddendum: "{{ company }}"`.
+  record Context,
+    protected_keys : Array(String) = [] of String,
+    vars : Hash(String, String) = {} of String => String
 
   # Résultat d'un step : son `outcome` et un message lisible pour le
   # rapport (« nginx déjà installé », « +2 packages : zsh, tmux »).
