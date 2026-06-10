@@ -16,7 +16,7 @@
 #     démarre même si le firmware choisit un autre disque, ou si le
 #     premier disque tombe) ;
 #   - les pools data sont créés après le base system via un snippet
-#     généré par beryl (références /dev/vtbd* directes, disques entiers).
+#     généré par beryl (disques partitionnés + labellisés gpt, ashift natif).
 
 set -eu
 
@@ -26,6 +26,7 @@ POOL="__POOL_NAME__"
 HOSTNAME="__HOSTNAME__"
 ABI="__ABI__"
 SWAP_GB="__SWAP_GB__"
+BOOT_ASHIFT="__BOOT_ASHIFT__"
 TIMEZONE="__TIMEZONE__"
 USERS_TSV_B64="__USERS_TSV_B64__"
 PACKAGES="__PACKAGES__"
@@ -72,6 +73,7 @@ esac
 echo "==> [beryl] Création du pool ZFS ${POOL} (vdev :${BOOT_VDEV})"
 # shellcheck disable=SC2086
 zpool create -f \
+  -o ashift="${BOOT_ASHIFT}" \
   -O canmount=off -O mountpoint=none \
   -O compression=lz4 -O atime=off \
   -R /mnt \

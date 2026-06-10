@@ -144,6 +144,17 @@ module Beryl::CLI::Bootstrap
     end
     pool_name = boot_pool.name
 
+    # Taille de bloc PHYSIQUE de chaque disque, détectée côté rescue Linux
+    # (qui voit le vrai matériel ; la VM QEMU ne voit que du 512 via virtio).
+    # On en déduit l'ashift NATIF par pool (log2) → zpool create -o ashift=N
+    # de SES disques (HDD 4K → 12, NVMe 512 → 9), jamais une valeur en dur.
+    # Cf. warning ZFS « non-native block size » constaté sur qrbx.
+    all_pool_disks = disks + host.data_zpools.flat_map(&.disks)
+    ashift_by_disk = detect_ashifts(rescue_conn, all_pool_disks)
+    boot_ashift = disks.map { |d| ashift_by_disk[d]? || 12 }.max
+    STDERR.puts "[#{Beryl.format_timestamp(Time.local)}] [beryl bootstrap] 7 ashift natif (blockdev) : " +
+                ashift_by_disk.map { |d, a| "#{d}→#{a}" }.join(", ")
+
     # Pools data : créés post-install via `zpool create` dans la VM
     # mfsBSD qui tourne encore. Chaque pool data se voit attribué un
     # segment contigu de vtbd* QEMU après les disques du pool boot.
@@ -198,6 +209,7 @@ module Beryl::CLI::Bootstrap
         disks: pool.disks,
         mountpoint: mp,
         encryption_key_hex: key_hex,
+        ashift: pool.disks.map { |d| ashift_by_disk[d]? || 12 }.max,
       )
     end
     timezone = host.freebsd_string("timezone") || "Europe/Paris"
@@ -313,6 +325,7 @@ module Beryl::CLI::Bootstrap
       scaleway_zone: scaleway_zone,
       install_type: install_type,
       data_pools: data_pools,
+      boot_ashift: boot_ashift,
       follow_hint_host_name: "#{host.account_name}/#{host.fqdn}",
     )
     bootstrap.run
@@ -366,5 +379,36 @@ module Beryl::CLI::Bootstrap
         ssh_keys: ssh_keys,
       )
     end
+  end
+
+  # Interroge le rescue (Linux) pour la taille de bloc PHYSIQUE de chaque
+  # disque et la convertit en ashift ZFS (log2). Lecture seule. Repli sur
+  # 12 (4 K, sûr) si `blockdev` échoue/manque sur un disque. La détection
+  # DOIT se faire ici (rescue) et pas dans la VM : le virtio QEMU ne
+  # propage pas la taille physique → la VM voit tout en 512.
+  private def self.detect_ashifts(conn : SSH::Connection, disks : Array(String)) : Hash(String, Int32)
+    result = {} of String => Int32
+    return result if disks.empty?
+    # Une ligne par disque (alignement garanti par le `|| echo 4096`).
+    cmd = disks.map { |d| "blockdev --getpbsz #{Process.quote(d)} 2>/dev/null || echo 4096" }.join("\n")
+    out = conn.exec(cmd, raise_on_error: false).stdout
+    lines = out.each_line.map(&.strip).reject(&.empty?).to_a
+    disks.each_with_index do |d, i|
+      pbsz = lines[i]?.try(&.to_i?) || 4096
+      result[d] = ashift_for(pbsz)
+    end
+    result
+  end
+
+  # ashift = log2(block_size). block_size est une puissance de 2 (512,
+  # 4096, 8192…). 512→9, 4096→12, 8192→13.
+  private def self.ashift_for(block_size : Int32) : Int32
+    a = 9
+    bs = block_size < 512 ? 512 : block_size
+    while bs > 512
+      bs //= 2
+      a += 1
+    end
+    a
   end
 end

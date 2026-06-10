@@ -368,8 +368,18 @@ describe Beryl::Bootstrap::QemuInRescue do
       # Partitionnement labellisé par nom de pool + index local (0,1).
       script.should contain("gpart add -t freebsd-zfs -a 1m -l zdata0 vtbd2")
       script.should contain("gpart add -t freebsd-zfs -a 1m -l zdata1 vtbd3")
-      # Le pool repose sur les labels gpt, pas sur les disques entiers.
-      script.should contain("zpool create -f -R /mnt -m /data zdata mirror /dev/gpt/zdata0 /dev/gpt/zdata1")
+      # Le pool repose sur les labels gpt, pas sur les disques entiers,
+      # avec l'ashift (défaut 12 ici, le DataPoolSpec n'en fixant pas).
+      script.should contain("zpool create -f -o ashift=12 -R /mnt -m /data zdata mirror /dev/gpt/zdata0 /dev/gpt/zdata1")
+    end
+
+    it "utilise l'ashift NATIF fourni au DataPoolSpec (ex. 9 pour du 512 B)" do
+      dp = Beryl::Bootstrap::DataPoolSpec.new(
+        name: "zdata", raid: 0,
+        disks: ["/dev/sdb"], mountpoint: "/data", ashift: 9,
+      )
+      script = make_bootstrap(disks: ["/dev/sda"], data_pools: [dp]).data_pools_script
+      script.should contain("zpool create -f -o ashift=9 -R /mnt -m /data zdata /dev/gpt/zdata0")
     end
 
     it "enchaîne plusieurs pools data avec des vtbd contigus" do
@@ -394,8 +404,8 @@ describe Beryl::Bootstrap::QemuInRescue do
       script.should contain("gpart add -t freebsd-zfs -a 1m -l zdata0 vtbd3")
       script.should contain("gpart add -t freebsd-zfs -a 1m -l zdata1 vtbd4")
       script.should contain("gpart add -t freebsd-zfs -a 1m -l zbackup0 vtbd5")
-      script.should contain("zpool create -f -R /mnt -m /data zdata mirror /dev/gpt/zdata0 /dev/gpt/zdata1")
-      script.should contain("zpool create -f -R /mnt -m /backup zbackup /dev/gpt/zbackup0")
+      script.should contain("zpool create -f -o ashift=12 -R /mnt -m /data zdata mirror /dev/gpt/zdata0 /dev/gpt/zdata1")
+      script.should contain("zpool create -f -o ashift=12 -R /mnt -m /backup zbackup /dev/gpt/zbackup0")
     end
 
     it "gère RAID 10 avec paires mirror contiguës" do
@@ -405,7 +415,7 @@ describe Beryl::Bootstrap::QemuInRescue do
         mountpoint: "/data",
       )
       script = make_bootstrap(disks: ["/dev/sda"], data_pools: [dp]).data_pools_script
-      script.should contain("zpool create -f -R /mnt -m /data zdata mirror /dev/gpt/zdata0 /dev/gpt/zdata1 mirror /dev/gpt/zdata2 /dev/gpt/zdata3")
+      script.should contain("zpool create -f -o ashift=12 -R /mnt -m /data zdata mirror /dev/gpt/zdata0 /dev/gpt/zdata1 mirror /dev/gpt/zdata2 /dev/gpt/zdata3")
     end
 
     # Bug quantas (24 avril 2026) : sans `set cachefile`, le

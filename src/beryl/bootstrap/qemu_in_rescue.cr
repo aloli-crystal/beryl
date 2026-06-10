@@ -58,7 +58,12 @@ module Beryl::Bootstrap
     raid : Int32,
     disks : Array(String),
     mountpoint : String,
-    encryption_key_hex : String? = nil do
+    encryption_key_hex : String? = nil,
+    # ashift ZFS du pool = log2(taille de bloc physique des disques),
+    # détecté côté rescue par beryl (`blockdev --getpbsz`). Défaut 12 (4 K,
+    # sûr) si non fourni. JAMAIS arbitraire en prod : bootstrap.cr passe la
+    # valeur native de CES disques (HDD 4K → 12, NVMe 512 → 9, etc.).
+    ashift : Int32 = 12 do
     def validate! : Nil
       raise ArgumentError.new("pool data : name vide") if name.empty?
       raise ArgumentError.new("pool data #{name} : disks vide") if disks.empty?
@@ -226,6 +231,9 @@ module Beryl::Bootstrap
       @sudoers : Array(String) = [] of String,
       @install_type : String = "distribution_sets",
       @data_pools : Array(DataPoolSpec) = [] of DataPoolSpec,
+      # ashift du pool boot = log2(taille de bloc physique des disques
+      # boot), détecté côté rescue par beryl. Défaut 12 (4 K) si non fourni.
+      @boot_ashift : Int32 = 12,
       @follow_hint_host_name : String? = nil,
     )
       raise ArgumentError.new("disks ne peut pas être vide") if @disks.empty?
@@ -392,6 +400,7 @@ module Beryl::Bootstrap
         .gsub("__HOSTNAME__", @hostname)
         .gsub("__ABI__", @abi)
         .gsub("__SWAP_GB__", @swap_gb.to_s)
+        .gsub("__BOOT_ASHIFT__", @boot_ashift.to_s)
         .gsub("__TIMEZONE__", @timezone)
         .gsub("__USERS_TSV_B64__", pkgbase_users_tsv_b64)
         .gsub("__PACKAGES__", @packages.join(" "))
@@ -500,7 +509,7 @@ module Beryl::Bootstrap
           key_b64 = Base64.strict_encode(key_hex)
           lines << "{"
           lines << "  KEY=$(echo '#{key_b64}' | base64 -d)"
-          lines << "  printf '%s' \"$KEY\" | zpool create -f " \
+          lines << "  printf '%s' \"$KEY\" | zpool create -f -o ashift=#{pool.ashift} " \
                    "-O encryption=on -O keyformat=hex -O keylocation=prompt " \
                    "-R /mnt -m #{pool.mountpoint} #{pool.name} #{vdev}"
           lines << "  unset KEY"
@@ -512,7 +521,7 @@ module Beryl::Bootstrap
           lines << "zfs unmount #{pool.name} 2>/dev/null || true"
           lines << "zpool export #{pool.name}"
         else
-          lines << "zpool create -f -R /mnt -m #{pool.mountpoint} #{pool.name} #{vdev}"
+          lines << "zpool create -f -o ashift=#{pool.ashift} -R /mnt -m #{pool.mountpoint} #{pool.name} #{vdev}"
           lines << "zpool set cachefile=/mnt/boot/zfs/zpool.cache #{pool.name}"
         end
         vtbd_index += pool.disks.size
