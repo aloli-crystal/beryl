@@ -1,5 +1,0 @@
-recipe: base-packages
-description: Override local — packages de base spécifiques à ce host.
-steps:
-  - pkg-install:
-      packages: [bash, git, curl, vim]

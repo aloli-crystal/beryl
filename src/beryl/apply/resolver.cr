@@ -1,28 +1,25 @@
 require "./recipe"
 
 module Beryl::Apply
-  # Résout l'ensemble des recettes à exécuter pour un host et leur
-  # ordre.
+  # Résout l'ensemble des recettes à exécuter et leur ordre, à partir
+  # d'une liste de recettes d'ENTRÉE (les noms demandés) et du dépôt de
+  # recettes (`central_dir`).
   #
-  # Entrées :
-  #   * `host_dir`    : dossier d'orchestration du host
-  #     (`~/.config/beryl/<société>/<domaine>/<host>/`). Les `*.yml`
-  #     qu'il contient sont les recettes *explicitement demandées*.
-  #   * `central_dir` : dossier `recipes/` du dépôt central
-  #     (`~/.config/beryl/recipes/recipes/`).
+  # Les recettes d'entrée viennent de la config (`apply_recipes:`,
+  # cascadé du merge société → domaine → host) ou d'un argument CLI
+  # one-off (`beryl apply <host> <recette>`). Il n'y a PLUS de dossier
+  # d'orchestration par host : la personnalisation passe par les
+  # `parameters:` des recettes.
   #
   # Étapes :
-  #   1. Scan de `host_dir` → recettes demandées.
-  #   2. Fermeture transitive des `requires:` — pour chaque recette R,
-  #      on cherche `R.yml` d'abord dans `host_dir` (override), sinon
-  #      dans `central_dir`. Introuvable → `RecipeNotFound`.
-  #   3. Tri topologique (Kahn) : les dépendances sortent avant leurs
-  #      dépendants. Tri alphabétique à indegree égal pour un ordre
-  #      déterministe.
-  #   4. Cycle → `Cycle` (liste des recettes impliquées).
+  #   1. Fermeture transitive des `requires:` — chaque recette est
+  #      cherchée dans `central_dir`. Introuvable → `RecipeNotFound`.
+  #   2. Tri topologique (Kahn) : les dépendances sortent avant leurs
+  #      dépendants. Ordre alphabétique à indegree égal (déterministe).
+  #   3. Cycle → `Cycle` (liste des recettes impliquées).
   class Resolver
     # Levée quand une recette référencée (demandée ou via `requires:`)
-    # est introuvable dans le dossier host comme dans le dépôt central.
+    # est introuvable dans le dépôt de recettes.
     class RecipeNotFound < Exception
     end
 
@@ -35,14 +32,13 @@ module Beryl::Apply
       end
     end
 
-    def initialize(@host_dir : String, @central_dir : String)
+    def initialize(@central_dir : String)
     end
 
     # Retourne les recettes dans l'ordre d'exécution (dépendances
-    # d'abord). Liste vide si le dossier host n'existe pas ou ne
-    # contient aucune recette.
-    def resolve : Array(Recipe)
-      requested = scan_host_dir
+    # d'abord), à partir des noms d'entrée `requested`. Liste vide si
+    # `requested` est vide.
+    def resolve(requested : Array(String)) : Array(Recipe)
       return [] of Recipe if requested.empty?
 
       loaded = {} of String => Recipe
@@ -50,30 +46,15 @@ module Beryl::Apply
       topo_sort(loaded)
     end
 
-    # Noms des recettes explicitement demandées (fichiers
-    # `*.recipe.yml` du dossier host), triés.
-    def scan_host_dir : Array(String)
-      return [] of String unless Dir.exists?(@host_dir)
-      Dir.glob(File.join(@host_dir, "*#{Recipe::SUFFIX}"))
-        .map { |p| File.basename(p).rchop(Recipe::SUFFIX) }
-        .sort
-    end
-
-    # Localise et charge `<name>.recipe.yml` : override dossier host
-    # prioritaire, sinon dépôt central.
+    # Localise et charge `<name>.recipe.yml` dans le dépôt de recettes.
     private def lookup(name : String, requirer : String?) : Recipe
-      host_path = File.join(@host_dir, "#{name}#{Recipe::SUFFIX}")
-      return Recipe.load(host_path) if File.exists?(host_path)
-
       central_path = File.join(@central_dir, "#{name}#{Recipe::SUFFIX}")
       return Recipe.load(central_path) if File.exists?(central_path)
 
       origin = requirer ? " (requise par `#{requirer}`)" : ""
       raise RecipeNotFound.new(
-        "recette `#{name}` introuvable#{origin}. Symlinkez-la dans le " \
-        "dossier du host ou ajoutez-la au dépôt central.\n" \
-        "  cherchée dans : #{host_path}\n" \
-        "             et : #{central_path}"
+        "recette `#{name}` introuvable#{origin} dans le dépôt de recettes.\n" \
+        "  cherchée dans : #{central_path}"
       )
     end
 

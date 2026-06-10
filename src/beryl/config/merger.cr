@@ -81,7 +81,10 @@ module Beryl::Config
     # « toutes les arrays s'appendent » pour éviter les surprises
     # (disks, ssh_keys qui doivent rester override).
     def self.append_array_path?(path : String) : Bool
-      {"freebsd.packages", "freebsd.sudoers", "freebsd.users"}.includes?(path)
+      # `apply_recipes` (recettes beryl apply) cascade comme packages :
+      # domaine → groupe → host s'additionnent (ssh-hardening au domaine
+      # + headscale-node sur un host = les deux).
+      {"freebsd.packages", "freebsd.sudoers", "freebsd.users", "apply_recipes"}.includes?(path)
     end
 
     def self.merge_arrays(

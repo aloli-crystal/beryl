@@ -37,7 +37,7 @@ module Beryl::CLI::Apply
     positional = [] of String
 
     parser = OptionParser.new do |p|
-      p.banner = "USAGE : beryl apply <host> [options]"
+      p.banner = "USAGE : beryl apply <host> [recette] [options]"
       p.on("-a NAME", "--account=NAME", "Forcer la société (si ambiguë)") { |v| account_hint = v }
       p.on("-d NAME", "--domain=NAME", "Forcer le domaine") { |v| domain_hint = v }
       p.on("-n", "--dry-run", "Affiche ce qui changerait sans l'appliquer") { dry_run = true }
@@ -49,9 +49,12 @@ module Beryl::CLI::Apply
 
     raw = positional.first?
     unless raw
-      STDERR.puts "beryl : hôte non précisé. USAGE : beryl apply <host>"
+      STDERR.puts "beryl : hôte non précisé. USAGE : beryl apply <host> [recette]"
       return EXIT_USAGE
     end
+    # 2e positionnel optionnel : une recette nommée à appliquer en
+    # ONE-OFF (non persistée dans la config), ex. une rotation de clé.
+    adhoc_recipe = positional[1]?
     parsed = Beryl::CLI::AccountUtils.split_host_path(raw)
     host_name = parsed[:host]
     account_hint ||= parsed[:account]
@@ -71,20 +74,26 @@ module Beryl::CLI::Apply
     # Un host virtuel (pas de fichier `<host>.host.yml`) n'a pas de
     # dossier d'orchestration — rien à appliquer.
     if host.virtual
-      log "aucune recette pour #{host.fqdn} (host virtuel, pas de dossier d'orchestration)."
+      log "aucune recette pour #{host.fqdn} (host virtuel : pas de fichier .host.yml, donc pas de connexion)."
       return EXIT_OK
     end
 
-    # Dossier d'orchestration : à côté du fichier host, dérivé de son
-    # `source_path` (`<host>.host.yml` → `<host>/`). Correct aussi
-    # pour un host en groupe (`<groupe>/<host>.host.yml` → `<groupe>/<host>/`).
-    host_dir = host.node.source_path.rchop(Beryl::Config::HOST_SUFFIX)
     central_dir = central_recipes_dir(config_root, host)
 
-    resolver = Beryl::Apply::Resolver.new(host_dir, central_dir)
-    recipes = resolver.resolve
+    # Recettes d'ENTRÉE : soit une recette nommée en argument (one-off,
+    # non persistée — ex. une rotation de clé), soit la liste
+    # `apply_recipes:` cascadée du merge (état désiré, versionné dans la
+    # config société → domaine → host).
+    requested =
+      if r = adhoc_recipe
+        [r]
+      else
+        apply_recipes_list(host)
+      end
+    resolver = Beryl::Apply::Resolver.new(central_dir)
+    recipes = resolver.resolve(requested)
     if recipes.empty?
-      log "aucune recette pour #{host.fqdn} (dossier #{host_dir} absent ou vide)."
+      log "aucune recette pour #{host.fqdn} (ni recette en argument, ni `apply_recipes:` dans la config)."
       return EXIT_OK
     end
 
@@ -154,6 +163,15 @@ module Beryl::CLI::Apply
         File.join(config_root, "recipes")
       end
     File.join(local_path, "recipes")
+  end
+
+  # Liste des recettes d'entrée déclarées en config (`apply_recipes:`),
+  # cascadée par le merge (société → domaine → host, append + dédup comme
+  # `packages`). Vide si absente.
+  private def self.apply_recipes_list(host : Beryl::Config::ResolvedHost) : Array(String)
+    any = host.merged[YAML::Any.new("apply_recipes")]?
+    return [] of String unless any
+    (any.as_a? || [] of YAML::Any).compact_map(&.as_s?)
   end
 
   # Clé(s) publique(s) que beryl utilise pour se connecter, dérivée(s)

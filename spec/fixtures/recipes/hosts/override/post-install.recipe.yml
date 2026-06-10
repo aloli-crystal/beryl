@@ -1,4 +1,0 @@
-recipe: post-install
-description: Agrégat demandé sur ce host (avec override de base-packages).
-requires:
-  - base-packages
