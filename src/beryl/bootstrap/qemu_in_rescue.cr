@@ -475,8 +475,23 @@ module Beryl::Bootstrap
       boot_count = @disks.size
       vtbd_index = boot_count + 1 # vtbd(boot_count+1) = premier disque data
       @data_pools.each do |pool|
-        devices = (vtbd_index...vtbd_index + pool.disks.size).map { |i| "vtbd#{i}" }
-        vdev = pool.vdev_spec(devices)
+        # Partitionnement des disques data AVANT le zpool create, comme le
+        # pool boot : 1 partition freebsd-zfs alignée 1 Mio + label gpt
+        # `<pool><i>` → le pool repose sur /dev/gpt/<pool><i> (noms stables
+        # et cohérents sur le bare-metal, insensibles au renommage adaN),
+        # plutôt que des disques entiers (vtbd → mélange ada/diskid). Le
+        # labelclear/destroy nettoie d'éventuels résidus (re-bootstrap).
+        labels = [] of String
+        pool.disks.size.times do |j|
+          vtbd = "vtbd#{vtbd_index + j}"
+          label = "#{pool.name}#{j}"
+          lines << "zpool labelclear -f #{vtbd} 2>/dev/null || true"
+          lines << "gpart destroy -F #{vtbd} 2>/dev/null || true"
+          lines << "gpart create -s gpt #{vtbd}"
+          lines << "gpart add -t freebsd-zfs -a 1m -l #{label} #{vtbd}"
+          labels << "/dev/gpt/#{label}"
+        end
+        vdev = pool.vdev_spec(labels)
         if key_hex = pool.encryption_key_hex
           # Clé hex en base64 (les 64 chars hex eux-mêmes ne contiennent
           # pas de caractère spécial, mais on garde l'encodage pour

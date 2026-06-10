@@ -323,10 +323,18 @@ done
 echo "==> [beryl] Verrouillage du dataset racine"
 zfs set canmount=noauto "${POOL}/ROOT/default"
 
-# Pools data : créés MAINTENANT (depuis mfsBSD) sur disques entiers, avec
-# -R /mnt pour que leur cache atterrisse dans /mnt/boot/zfs/zpool.cache et
-# qu'ils soient ré-importés au boot (zfs_enable=YES). Snippet vide si
-# aucun pool data déclaré.
+# Parité hostid : les pools data sont créés par CETTE VM mfsBSD (son
+# hostid). Sans /etc/hostid identique côté cible, le FreeBSD installé a un
+# hostid différent → « pool was last accessed by another system » → pas
+# d'auto-import au boot (constaté qgra). On copie donc le hostid de la VM
+# dans la cible pour que les deux concordent.
+cp /etc/hostid /mnt/etc/hostid 2>/dev/null || true
+
+# Pools data : créés MAINTENANT (depuis mfsBSD) sur partitions freebsd-zfs
+# LABELLISÉES (gpt/<pool><i>, cf. data_pools_script) — noms stables et
+# cohérents comme le pool boot, plutôt que des disques entiers. -R /mnt
+# pour que leur cache atterrisse dans /mnt/boot/zfs/zpool.cache et qu'ils
+# soient ré-importés au boot (zfs_enable=YES). Vide si aucun pool data.
 DATA_POOLS_SCRIPT=$(printf '%s' "${DATA_POOLS_SCRIPT_B64}" | b64decode -r)
 if [ -n "${DATA_POOLS_SCRIPT}" ]; then
   echo "==> [beryl] Création des pools data"

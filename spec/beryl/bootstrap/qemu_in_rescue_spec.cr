@@ -357,7 +357,7 @@ describe Beryl::Bootstrap::QemuInRescue do
       make_bootstrap.data_pools_script.should eq("")
     end
 
-    it "mappe les vtbd après les disques du pool boot" do
+    it "partitionne les vtbd (après le boot) et crée le pool sur des labels gpt stables" do
       # boot = 1 disque → vtbd1, data = 2 disques → vtbd2 + vtbd3
       dp = Beryl::Bootstrap::DataPoolSpec.new(
         name: "zdata", raid: 1,
@@ -365,7 +365,11 @@ describe Beryl::Bootstrap::QemuInRescue do
         mountpoint: "/data",
       )
       script = make_bootstrap(disks: ["/dev/sda"], data_pools: [dp]).data_pools_script
-      script.should contain("zpool create -f -R /mnt -m /data zdata mirror vtbd2 vtbd3")
+      # Partitionnement labellisé par nom de pool + index local (0,1).
+      script.should contain("gpart add -t freebsd-zfs -a 1m -l zdata0 vtbd2")
+      script.should contain("gpart add -t freebsd-zfs -a 1m -l zdata1 vtbd3")
+      # Le pool repose sur les labels gpt, pas sur les disques entiers.
+      script.should contain("zpool create -f -R /mnt -m /data zdata mirror /dev/gpt/zdata0 /dev/gpt/zdata1")
     end
 
     it "enchaîne plusieurs pools data avec des vtbd contigus" do
@@ -385,8 +389,13 @@ describe Beryl::Bootstrap::QemuInRescue do
         raid: "mirror",
         data_pools: [dp1, dp2],
       ).data_pools_script
-      script.should contain("zpool create -f -R /mnt -m /data zdata mirror vtbd3 vtbd4")
-      script.should contain("zpool create -f -R /mnt -m /backup zbackup vtbd5")
+      # Les labels sont préfixés par le nom du pool + index LOCAL au pool
+      # (zdata0/1, zbackup0), pas par l'index vtbd → uniques entre pools.
+      script.should contain("gpart add -t freebsd-zfs -a 1m -l zdata0 vtbd3")
+      script.should contain("gpart add -t freebsd-zfs -a 1m -l zdata1 vtbd4")
+      script.should contain("gpart add -t freebsd-zfs -a 1m -l zbackup0 vtbd5")
+      script.should contain("zpool create -f -R /mnt -m /data zdata mirror /dev/gpt/zdata0 /dev/gpt/zdata1")
+      script.should contain("zpool create -f -R /mnt -m /backup zbackup /dev/gpt/zbackup0")
     end
 
     it "gère RAID 10 avec paires mirror contiguës" do
@@ -396,7 +405,7 @@ describe Beryl::Bootstrap::QemuInRescue do
         mountpoint: "/data",
       )
       script = make_bootstrap(disks: ["/dev/sda"], data_pools: [dp]).data_pools_script
-      script.should contain("zpool create -f -R /mnt -m /data zdata mirror vtbd2 vtbd3 mirror vtbd4 vtbd5")
+      script.should contain("zpool create -f -R /mnt -m /data zdata mirror /dev/gpt/zdata0 /dev/gpt/zdata1 mirror /dev/gpt/zdata2 /dev/gpt/zdata3")
     end
 
     # Bug quantas (24 avril 2026) : sans `set cachefile`, le
