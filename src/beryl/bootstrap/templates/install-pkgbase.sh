@@ -120,26 +120,29 @@ VMAJ=$(uname -r | cut -d. -f1)
 mkdir -p /mnt/usr/share/keys
 cp -R "/usr/share/keys/pkgbase-${VMAJ}" /mnt/usr/share/keys/
 
-echo "==> [beryl] Installation du base system dans /mnt (pkg --rootdir)"
-# NB pkgbase : la base est éclatée en paquets. Il FAUT inclure
-# explicitement le client DHCP (FreeBSD-dhclient) et resolvconf, sinon
-# `ifconfig_DEFAULT="DHCP"` dans rc.conf ne récupère aucune IP → serveur
-# booté mais MUET réseau (ping/SSH timeout). Constaté in vivo qgra (1er
-# boot bare-metal). dhclient/resolvconf ne sont les dépendances d'aucun
-# autre paquet de la liste → à nommer explicitement.
-pkg --rootdir /mnt install -y -r FreeBSD-base \
-  FreeBSD-runtime \
-  FreeBSD-clibs \
-  FreeBSD-kernel-generic \
-  FreeBSD-rc \
-  FreeBSD-utilities \
-  FreeBSD-dhclient \
-  FreeBSD-resolvconf \
-  FreeBSD-ssh \
-  FreeBSD-dma \
-  FreeBSD-bootloader \
-  FreeBSD-zfs \
-  FreeBSD-fetch
+echo "==> [beryl] Installation de TOUTE la base runtime (équivalent base.txz)"
+# LEÇON IN VIVO (qsbg) : cueillir ~13 paquets à la main donne une base
+# INCOMPLÈTE — il manquait gpart (FreeBSD-geom), devd (événements « lien
+# up » → DHCP au boot), etc. → `/dev/gpt/*` absents (EFI/swap KO) ET pas
+# de réseau (DHCP jamais déclenché quand la NIC monte). Le tarball, lui,
+# pose base.txz = TOUTE la base. On fait pareil : on liste tous les
+# paquets de FreeBSD-base et on EXCLUT seulement les variantes
+# non-runtime (dev/dbg/man/lib32/src/tests/profile). Catalogue d'abord.
+env ABI="${ABI}" IGNORE_OSVERSION=yes pkg --rootdir /mnt update -f -r FreeBSD-base
+# On tente de lister tous les paquets runtime de FreeBSD-base et d'EXCLURE
+# les variantes non-runtime (dev/dbg/man/lib32/src/tests/profile) → base
+# propre. Si le listing échoue (syntaxe pkg / catalogue), on BASCULE sur
+# le glob `FreeBSD-*` (toute la base, plus de variantes mais certain) :
+# l'important est une base COMPLÈTE, pas un pari sur une commande.
+BASE_PKGS=$(pkg --rootdir /mnt rquery -r FreeBSD-base '%n' 2>/dev/null | grep -vE '(-dev|-dbg|-man|-lib32|-src|-tests|-profile)$' | tr '\n' ' ')
+if [ -n "${BASE_PKGS}" ] && [ "$(echo ${BASE_PKGS} | wc -w)" -gt 30 ]; then
+  echo "    base runtime filtrée : $(echo ${BASE_PKGS} | wc -w) paquets"
+  # shellcheck disable=SC2086
+  env ABI="${ABI}" IGNORE_OSVERSION=yes pkg --rootdir /mnt install -y -r FreeBSD-base ${BASE_PKGS}
+else
+  echo "    listing indisponible → install glob FreeBSD-* (toute la base)"
+  env ABI="${ABI}" IGNORE_OSVERSION=yes pkg --rootdir /mnt install -y -r FreeBSD-base -g 'FreeBSD-*'
+fi
 
 echo "==> [beryl] Configuration /boot/loader.conf"
 cat > /mnt/boot/loader.conf <<'LOADER'
