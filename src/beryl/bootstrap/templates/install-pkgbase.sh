@@ -129,18 +129,21 @@ echo "==> [beryl] Installation de TOUTE la base runtime (équivalent base.txz)"
 # paquets de FreeBSD-base et on EXCLUT seulement les variantes
 # non-runtime (dev/dbg/man/lib32/src/tests/profile). Catalogue d'abord.
 env ABI="${ABI}" IGNORE_OSVERSION=yes pkg --rootdir /mnt update -f -r FreeBSD-base
-# On tente de lister tous les paquets runtime de FreeBSD-base et d'EXCLURE
-# les variantes non-runtime (dev/dbg/man/lib32/src/tests/profile) → base
-# propre. Si le listing échoue (syntaxe pkg / catalogue), on BASCULE sur
-# le glob `FreeBSD-*` (toute la base, plus de variantes mais certain) :
-# l'important est une base COMPLÈTE, pas un pari sur une commande.
-BASE_PKGS=$(pkg --rootdir /mnt rquery -r FreeBSD-base '%n' 2>/dev/null | grep -vE '(-dev|-dbg|-man|-lib32|-src|-tests|-profile)$' | tr '\n' ' ')
+# Sélection des paquets À L'IDENTIQUE de l'outil officiel pkgbasify(8)
+# (github.com/FreeBSDFoundation/pkgbasify, select_package_sets) — PAS une
+# liste à la main (ça donnait une base incomplète : gpart/devd manquants).
+# pkgbasify : `pkg rquery -U -r FreeBSD-base %n` = TOUTE la base, puis
+# n'ajoute -dbg/-lib32/-tests QUE si /usr/lib/debug, /usr/lib32, /usr/tests
+# existent — donc sur un serveur neuf on les exclut. Le reste (base +
+# kernel + headers + man) = l'équivalent base.txz. Fallback glob si rquery
+# indisponible (pari évité : base complète quoi qu'il arrive).
+BASE_PKGS=$(pkg --rootdir /mnt rquery -U -r FreeBSD-base '%n' 2>/dev/null | grep -vE '(-dbg|-lib32|-tests)$' | tr '\n' ' ')
 if [ -n "${BASE_PKGS}" ] && [ "$(echo ${BASE_PKGS} | wc -w)" -gt 30 ]; then
-  echo "    base runtime filtrée : $(echo ${BASE_PKGS} | wc -w) paquets"
+  echo "    base (logique pkgbasify) : $(echo ${BASE_PKGS} | wc -w) paquets"
   # shellcheck disable=SC2086
   env ABI="${ABI}" IGNORE_OSVERSION=yes pkg --rootdir /mnt install -y -r FreeBSD-base ${BASE_PKGS}
 else
-  echo "    listing indisponible → install glob FreeBSD-* (toute la base)"
+  echo "    rquery indisponible → fallback glob FreeBSD-* (toute la base)"
   env ABI="${ABI}" IGNORE_OSVERSION=yes pkg --rootdir /mnt install -y -r FreeBSD-base -g 'FreeBSD-*'
 fi
 
