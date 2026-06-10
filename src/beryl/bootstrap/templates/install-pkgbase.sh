@@ -144,12 +144,18 @@ pkg --rootdir /mnt install -y -r FreeBSD-base \
 echo "==> [beryl] Configuration /boot/loader.conf"
 cat > /mnt/boot/loader.conf <<'LOADER'
 zfs_load="YES"
-opensolaris_load="YES"
 LOADER
 
-echo "==> [beryl] Configuration /etc/fstab (EFI premier disque + tous les swaps)"
+echo "==> [beryl] Configuration /etc/fstab (swaps uniquement, PAS /boot/efi)"
+# On NE met PAS /boot/efi dans la fstab. CAUSE RACINE du non-boot pkgbase
+# (vue via IPMI sur qsbg) : la fsck_msdosfs de /boot/efi au boot (pass 2)
+# échoue (« Can't open /dev/gpt/efi0 → UNEXPECTED INCONSISTENCY →
+# Automatic file system check failed → ABORTING BOOT ») et tombe en
+# single-user → pas de réseau/sshd. Or l'EFI n'a PAS besoin d'être montée
+# au runtime (seulement à l'install/màj). bsdinstall ne la met pas non
+# plus. NB : les labels /dev/gpt/* ne sont pas tous prêts tôt au rc → le
+# swap peut warner « No such file » (non fatal, à durcir séparément).
 {
-  echo "/dev/gpt/efi0   /boot/efi  msdosfs  rw,late   2  2"
   j=0
   while [ "${j}" -lt "${NB_BOOT_DISKS}" ]; do
     echo "/dev/gpt/swap${j}  none       swap     sw        0  0"
