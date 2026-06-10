@@ -120,32 +120,36 @@ VMAJ=$(uname -r | cut -d. -f1)
 mkdir -p /mnt/usr/share/keys
 cp -R "/usr/share/keys/pkgbase-${VMAJ}" /mnt/usr/share/keys/
 
-echo "==> [beryl] Installation de TOUTE la base runtime (équivalent base.txz)"
-# LEÇON IN VIVO (qsbg) : cueillir ~13 paquets à la main donne une base
-# INCOMPLÈTE — il manquait gpart (FreeBSD-geom), devd (événements « lien
-# up » → DHCP au boot), etc. → `/dev/gpt/*` absents (EFI/swap KO) ET pas
-# de réseau (DHCP jamais déclenché quand la NIC monte). Le tarball, lui,
-# pose base.txz = TOUTE la base. On fait pareil : on liste tous les
-# paquets de FreeBSD-base et on EXCLUT seulement les variantes
-# non-runtime (dev/dbg/man/lib32/src/tests/profile). Catalogue d'abord.
+echo "==> [beryl] Installation de la base via les SETS pkgbase (méthode bsdinstall)"
+# Sélection des paquets À L'IDENTIQUE de l'installeur officiel bsdinstall
+# (usr.sbin/bsdinstall/scripts/pkgbase.in, select_packages) — PAS une liste
+# à la main, qui donnait une base INCOMPLÈTE (gpart/devd manquants → pas de
+# réseau ni de labels). bsdinstall installe des MÉTA-PAQUETS « sets »
+# FreeBSD-set-* et laisse pkg résoudre les dépendances = base complète.
+# Toujours : set-minimal + le kernel (FreeBSD-kernel-generic) + pkg ; +
+# set-base (= « complete base system »). On OMET kernel-dbg/lib32 (symboles
+# debug, compat 32-bit) : inutiles sur un serveur, et bsdinstall ne les
+# coche par défaut que pour l'usage général ; réinstallables via pkg ensuite
+# (le repo base est activé ci-dessous).
 env ABI="${ABI}" IGNORE_OSVERSION=yes pkg --rootdir /mnt update -f -r FreeBSD-base
-# Sélection des paquets À L'IDENTIQUE de l'outil officiel pkgbasify(8)
-# (github.com/FreeBSDFoundation/pkgbasify, select_package_sets) — PAS une
-# liste à la main (ça donnait une base incomplète : gpart/devd manquants).
-# pkgbasify : `pkg rquery -U -r FreeBSD-base %n` = TOUTE la base, puis
-# n'ajoute -dbg/-lib32/-tests QUE si /usr/lib/debug, /usr/lib32, /usr/tests
-# existent — donc sur un serveur neuf on les exclut. Le reste (base +
-# kernel + headers + man) = l'équivalent base.txz. Fallback glob si rquery
-# indisponible (pari évité : base complète quoi qu'il arrive).
-BASE_PKGS=$(pkg --rootdir /mnt rquery -U -r FreeBSD-base '%n' 2>/dev/null | grep -vE '(-dbg|-lib32|-tests)$' | tr '\n' ' ')
-if [ -n "${BASE_PKGS}" ] && [ "$(echo ${BASE_PKGS} | wc -w)" -gt 30 ]; then
-  echo "    base (logique pkgbasify) : $(echo ${BASE_PKGS} | wc -w) paquets"
-  # shellcheck disable=SC2086
-  env ABI="${ABI}" IGNORE_OSVERSION=yes pkg --rootdir /mnt install -y -r FreeBSD-base ${BASE_PKGS}
+if pkg --rootdir /mnt rquery -U -r FreeBSD-base '%n' 2>/dev/null | grep -qx 'FreeBSD-set-base'; then
+  echo "    sets : FreeBSD-set-minimal FreeBSD-set-base FreeBSD-kernel-generic pkg"
+  env ABI="${ABI}" IGNORE_OSVERSION=yes pkg --rootdir /mnt install -U -y -r FreeBSD-base \
+    FreeBSD-set-minimal FreeBSD-set-base FreeBSD-kernel-generic pkg
 else
-  echo "    rquery indisponible → fallback glob FreeBSD-* (toute la base)"
-  env ABI="${ABI}" IGNORE_OSVERSION=yes pkg --rootdir /mnt install -y -r FreeBSD-base -g 'FreeBSD-*'
+  # Repo sans méta-paquets set-* (média custom / version antérieure) :
+  # repli sur TOUTE la base filtrée (hors -dbg/-lib32/-tests).
+  echo "    pas de sets FreeBSD-set-* → repli sur toute la base filtrée"
+  BASE_PKGS=$(pkg --rootdir /mnt rquery -U -r FreeBSD-base '%n' 2>/dev/null | grep -vE '(-dbg|-lib32|-tests)$' | tr '\n' ' ')
+  # shellcheck disable=SC2086
+  env ABI="${ABI}" IGNORE_OSVERSION=yes pkg --rootdir /mnt install -U -y -r FreeBSD-base ${BASE_PKGS}
 fi
+
+echo "==> [beryl] Activation du repo FreeBSD-base sur le système installé"
+# Pour que le serveur puisse mettre à jour sa base via `pkg upgrade` (=
+# l'intérêt de pkgbase). bsdinstall fait de même. pkg développe ${ABI}.
+mkdir -p /mnt/usr/local/etc/pkg/repos
+cp /usr/local/etc/pkg/repos/FreeBSD-base.conf /mnt/usr/local/etc/pkg/repos/
 
 echo "==> [beryl] Configuration /boot/loader.conf"
 cat > /mnt/boot/loader.conf <<'LOADER'
