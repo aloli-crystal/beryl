@@ -2,8 +2,11 @@ require "../primitive"
 
 module Beryl::Apply
   # Primitive `sshd-config-set` : pose une directive dans
-  # `/etc/ssh/sshd_config.d/beryl.conf` (fichier géré par beryl, inclus
-  # par le `sshd_config` de base via `Include sshd_config.d/*.conf`).
+  # `/etc/ssh/sshd_config.d/beryl.conf` (fichier géré par beryl). Comme
+  # FreeBSD ne met PAS d'`Include sshd_config.d/*.conf` par défaut, la
+  # primitive l'ajoute EN TÊTE du `sshd_config` si absent — sinon le
+  # drop-in serait écrit mais jamais lu. En tête car sshd retient la
+  # PREMIÈRE valeur d'une directive → les drop-ins priment.
   #
   # Idempotence : la directive est déjà présente avec la bonne valeur →
   # skip. Sinon le fichier est réécrit, validé (`sshd -t`) et sshd est
@@ -55,15 +58,24 @@ module Beryl::Apply
                 static_value.not_nil!
               end
 
-      directives = parse(shell.exec("cat #{Process.quote(PATH)} 2>/dev/null", raise_on_error: false).stdout)
+      # Garantit l'Include AVANT toute autre logique : sans lui, un
+      # `beryl.conf` déjà "à jour" resterait pourtant inerte.
+      include_added = ensure_include(shell, dry_run)
 
-      if directives[key]? == value
+      directives = parse(shell.exec("cat #{Process.quote(PATH)} 2>/dev/null", raise_on_error: false).stdout)
+      changed = directives[key]? != value
+
+      if !changed && !include_added
         return StepResult.skipped("#{key} déjà = #{value}")
       end
 
       previous = directives[key]?
       directives[key] = value
-      msg = "#{key} : #{previous.nil? ? "(absent)" : previous} → #{value}"
+
+      parts = [] of String
+      parts << "Include sshd_config.d/*.conf activé" if include_added
+      parts << (changed ? "#{key} : #{previous.nil? ? "(absent)" : previous} → #{value}" : "#{key} déjà = #{value}")
+      msg = parts.join(" ; ")
       return StepResult.applied("#{msg} (dry-run)") if dry_run
 
       shell.exec("mkdir -p #{Process.quote(File.dirname(PATH))}")
@@ -71,6 +83,23 @@ module Beryl::Apply
       shell.exec("sshd -t") # valide la conf — échec = stop net
       shell.exec("service sshd reload")
       StepResult.applied(msg)
+    end
+
+    # S'assure que `/etc/ssh/sshd_config` inclut le dossier des drop-ins,
+    # en TÊTE de fichier (premier-match → drop-ins prioritaires). Retourne
+    # true s'il a fallu l'ajouter. En dry-run : détecte sans modifier.
+    private def ensure_include(shell : Shell, dry_run : Bool) : Bool
+      present = shell.exec(
+        "grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\\.d/' /etc/ssh/sshd_config",
+        raise_on_error: false,
+      ).success?
+      return false if present
+      return true if dry_run
+
+      shell.exec(
+        %(tmp=$(mktemp); { echo "Include /etc/ssh/sshd_config.d/*.conf"; cat /etc/ssh/sshd_config; } > "$tmp" && cat "$tmp" > /etc/ssh/sshd_config && rm -f "$tmp"),
+      )
+      true
     end
 
     # Parse le fichier géré (lignes `Clé Valeur`) en préservant l'ordre

@@ -35,4 +35,26 @@ describe Beryl::Apply::SshdConfigSet do
     written.should contain("PermitRootLogin no")
     written.should_not contain("PermitRootLogin yes")
   end
+
+  it "ajoute l'Include en tête du sshd_config s'il manque (sinon drop-in inerte)" do
+    shell = FakeShell.new
+    shell.stub(/cat .*beryl\.conf/, stdout: "PermitRootLogin no\n") # directive déjà bonne
+    shell.stub(/grep.*Include/, exit_code: 1)                       # Include ABSENT
+    result = prim("sshd-config-set").apply(
+      shell, apply_params(%({key: PermitRootLogin, value: "no"})), dry_run: false, context: ctx)
+    # même directive déjà à la bonne valeur : l'ajout de l'Include force quand même l'application + reload.
+    result.outcome.should eq(Beryl::Apply::Outcome::Applied)
+    shell.ran?(%r{Include /etc/ssh/sshd_config\.d/\*\.conf}).should be_true
+    shell.ran?(/service sshd reload/).should be_true
+  end
+
+  it "n'ajoute pas l'Include s'il est déjà présent (idempotent)" do
+    shell = FakeShell.new
+    shell.stub(/cat .*beryl\.conf/, stdout: "")
+    shell.stub(/grep.*Include/, exit_code: 0) # Include présent
+    prim("sshd-config-set").apply(
+      shell, apply_params(%({key: X11Forwarding, value: "no"})), dry_run: false, context: ctx)
+    # pas de réécriture du sshd_config principal (le prepend echo l'Include).
+    shell.ran?(%r{Include /etc/ssh/sshd_config\.d/\*\.conf}).should be_false
+  end
 end

@@ -281,6 +281,15 @@ PasswordAuthentication no
 ChallengeResponseAuthentication no
 SSHD
 
+# FreeBSD ne met PAS d'Include sshd_config.d/*.conf par défaut → sans lui,
+# le drop-in ci-dessus (et ceux de `beryl apply`) seraient écrits mais
+# jamais lus. On le pose EN TÊTE pour que les drop-ins priment.
+if ! grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/' /mnt/etc/ssh/sshd_config 2>/dev/null; then
+  printf 'Include /etc/ssh/sshd_config.d/*.conf\n' > /mnt/etc/ssh/sshd_config.new
+  cat /mnt/etc/ssh/sshd_config >> /mnt/etc/ssh/sshd_config.new 2>/dev/null || true
+  mv /mnt/etc/ssh/sshd_config.new /mnt/etc/ssh/sshd_config
+fi
+
 echo "==> [beryl] Installation du bootloader EFI sur CHAQUE disque boot"
 # Nom du fallback EFI selon l'architecture (BOOTX64 sur amd64,
 # BOOTAA64 sur arm64) — sinon le firmware UEFI ne trouve pas le
