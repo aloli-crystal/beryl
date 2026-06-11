@@ -173,20 +173,25 @@ module Beryl::CLI::Apply
 
   # Recettes d'entrée déclarées en config (`apply_recipes:`), cascadées
   # par le merge (société → domaine → host, append + dédup). Chaque entrée
-  # est soit un NOM (string), soit une map `{recipe: <nom>, arguments:
-  # {clé: valeur}}` — pour passer des arguments (ex. cibler un user
-  # particulier : `{recipe: oh-my-zsh, arguments: {user: pne}}`).
+  # est soit un NOM (string), soit une map à CLÉ UNIQUE `{<nom>: {clé:
+  # valeur}}` pour passer des arguments — même forme que les steps d'une
+  # recette. Ex. cibler un user particulier :
+  #
+  #   apply_recipes:
+  #     - ssh-hardening
+  #     - oh-my-zsh: { user: pne }
   private def self.apply_recipes_list(host : Beryl::Config::ResolvedHost) : Array(RecipeRequest)
     any = host.merged[YAML::Any.new("apply_recipes")]?
     return [] of RecipeRequest unless any
     (any.as_a? || [] of YAML::Any).compact_map do |e|
       if name = e.as_s?
         RecipeRequest.new(name, {} of String => String)
-      elsif h = e.as_h?
-        rname = h[YAML::Any.new("recipe")]?.try(&.as_s?)
+      elsif (h = e.as_h?) && !h.empty?
+        key, value = h.first
+        rname = key.as_s?
         next nil unless rname
         args = {} of String => String
-        if argh = h[YAML::Any.new("arguments")]?.try(&.as_h?)
+        if argh = value.as_h?
           argh.each { |k, v| args[k.as_s? || k.to_s] = v.as_s? || v.to_s }
         end
         RecipeRequest.new(rname, args)
