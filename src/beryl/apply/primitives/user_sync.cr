@@ -11,10 +11,13 @@ module Beryl::Apply
   #         primary_group: www          # optionnel (création seule)
   #         state: present              # ou `absent` → pw userdel
   #
-  # Groupes ADDITIFS : on ajoute le user aux groupes listés (s'il n'y est
-  # pas), on n'en retire JAMAIS — modèle « héritage » (on ajoute ce dont on
-  # a besoin). La suppression de compte exige `state: absent` EXPLICITE
-  # (jamais par simple absence de la liste) et conserve le /home.
+  # Groupes ADDITIFS (`secondary_groups` ou alias `groups`) : on ajoute le
+  # user aux groupes listés (s'il n'y est pas), on n'en retire JAMAIS —
+  # modèle « héritage » (on ajoute ce dont on a besoin). Le `shell` n'est
+  # posé qu'à la CRÉATION : sur un user existant, le changement de shell
+  # passe par une recette (oh-my-zsh / user-shell) — sinon il entrerait en
+  # conflit avec ces recettes (flap csh↔zsh à chaque apply). La suppression
+  # exige `state: absent` EXPLICITE (jamais par absence) et garde le /home.
   class UserSync < Primitive
     def name : String
       "user-sync"
@@ -33,7 +36,8 @@ module Beryl::Apply
         return StepResult.applied("#{user} : compte supprimé (home conservé)")
       end
 
-      groups = string_array(params, "secondary_groups")
+      # `secondary_groups` (canonique, comme le bootstrap) + alias `groups`.
+      groups = (string_array(params, "secondary_groups") + string_array(params, "groups")).uniq
       shell_path = string(params, "shell")
       primary = string(params, "primary_group")
 
@@ -56,13 +60,8 @@ module Beryl::Apply
         changes << "+#{g}"
       end
 
-      if sp = shell_path
-        current_shell = line.split(':')[6]? || ""
-        if current_shell != sp
-          shell.exec("pw usermod #{Process.quote(user)} -s #{Process.quote(sp)}") unless dry_run
-          changes << "shell→#{sp}"
-        end
-      end
+      # Le shell d'un user EXISTANT n'est pas touché ici (cf. en-tête) :
+      # une recette s'en charge (oh-my-zsh / user-shell), sans flap.
 
       return StepResult.skipped("#{user} : conforme") if changes.empty?
       msg = "#{user} : #{changes.join(", ")}"

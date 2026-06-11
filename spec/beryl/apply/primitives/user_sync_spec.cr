@@ -32,6 +32,25 @@ describe Beryl::Apply::UserSync do
     shell.ran?(/groupmod www/).should be_false
   end
 
+  it "accepte l'alias `groups` (= secondary_groups)" do
+    shell = FakeShell.new
+    shell.stub(/getent passwd deploy/, stdout: "deploy:*:1001:1001::/home/deploy:/bin/csh")
+    shell.stub(/id -Gn deploy/, stdout: "deploy")
+    prim("user-sync").apply(
+      shell, apply_params("{name: deploy, groups: [wheel]}"), dry_run: false, context: ctx)
+    shell.ran?(/pw groupmod wheel -m deploy/).should be_true
+  end
+
+  it "ne change PAS le shell d'un user existant (laissé aux recettes, anti-flap)" do
+    shell = FakeShell.new
+    shell.stub(/getent passwd deploy/, stdout: "deploy:*:1001:1001::/home/deploy:/bin/csh")
+    shell.stub(/id -Gn deploy/, stdout: "deploy wheel") # groupes déjà ok
+    result = prim("user-sync").apply(
+      shell, apply_params("{name: deploy, secondary_groups: [wheel], shell: /usr/local/bin/zsh}"), dry_run: false, context: ctx)
+    result.outcome.should eq(Beryl::Apply::Outcome::Skipped)
+    shell.ran?(/pw usermod.*-s/).should be_false
+  end
+
   it "crée le compte absent avec ses groupes et shell" do
     shell = FakeShell.new
     shell.stub(/getent passwd nouveau/, stdout: "") # absent
