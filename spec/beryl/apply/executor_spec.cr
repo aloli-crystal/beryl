@@ -54,9 +54,17 @@ describe Beryl::Apply::Executor do
     shell = FakeShell.new
     # La fixture recorder utilise la variable `greeting` (default bonjour,
     # argument salut). L'argument hôte doit primer → "coucou le monde".
-    host_args = {"recorder" => {"greeting" => "coucou"}}
+    host_args = {"recorder" => [{"greeting" => "coucou"}]}
     Beryl::Apply::Executor.new(shell, dry_run: false).run([central_recipe("recorder")], host_args)
     TestRecorder.last_params["msg"].as_s.should eq("coucou le monde")
+  end
+
+  it "joue une recette N fois pour N jeux d'arguments (fan-out user: [a, b])" do
+    shell = FakeShell.new
+    host_args = {"recorder" => [{"greeting" => "un"}, {"greeting" => "deux"}]}
+    report = Beryl::Apply::Executor.new(shell, dry_run: false).run([central_recipe("recorder")], host_args)
+    report.total.should eq(2)                                       # recorder (1 step) joué 2 fois
+    TestRecorder.last_params["msg"].as_s.should eq("deux le monde") # dernier combo
   end
 
   it "lève UnknownPrimitive pour un step inconnu" do

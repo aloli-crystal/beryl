@@ -91,7 +91,7 @@ module Beryl::CLI::Apply
         apply_recipes_list(host)
       end
     resolver = Beryl::Apply::Resolver.new(central_dir)
-    recipes = resolver.resolve(requests.map(&.name))
+    recipes = resolver.resolve(requests.map(&.name).uniq)
     if recipes.empty?
       log "aucune recette pour #{host.fqdn} (ni recette en argument, ni `apply_recipes:` dans la config)."
       return EXIT_OK
@@ -117,8 +117,8 @@ module Beryl::CLI::Apply
         "domain"   => host.domain_name,
       },
     )
-    recipe_args = {} of String => Hash(String, String)
-    requests.each { |req| recipe_args[req.name] = req.arguments }
+    recipe_args = {} of String => Array(Hash(String, String))
+    requests.each { |req| (recipe_args[req.name] ||= [] of Hash(String, String)) << req.arguments }
     report = Beryl::Apply::Executor.new(shell, dry_run, context).run(recipes, recipe_args)
 
     log "apply terminé pour #{host.fqdn}#{dry_run ? " (dry-run)" : ""} — #{report.summary_line}"
@@ -183,20 +183,40 @@ module Beryl::CLI::Apply
   private def self.apply_recipes_list(host : Beryl::Config::ResolvedHost) : Array(RecipeRequest)
     any = host.merged[YAML::Any.new("apply_recipes")]?
     return [] of RecipeRequest unless any
-    (any.as_a? || [] of YAML::Any).compact_map do |e|
+    (any.as_a? || [] of YAML::Any).flat_map do |e|
       if name = e.as_s?
-        RecipeRequest.new(name, {} of String => String)
-      elsif (h = e.as_h?) && !h.empty?
-        key, value = h.first
-        rname = key.as_s?
-        next nil unless rname
-        args = {} of String => String
-        if argh = value.as_h?
-          argh.each { |k, v| args[k.as_s? || k.to_s] = v.as_s? || v.to_s }
+        [RecipeRequest.new(name, {} of String => String)]
+      elsif (h = e.as_h?) && !h.empty? && (rname = h.first[0].as_s?)
+        # Args bruts : chaque clé → liste de valeurs (string → [v], liste
+        # → [v1, v2…]). Le produit cartésien donne un jeu d'args par
+        # combinaison → fan-out (ex. `user: [deploy, pne]` → 2 jeux).
+        raw = {} of String => Array(String)
+        if argh = h.first[1].as_h?
+          argh.each do |k, v|
+            kn = k.as_s? || k.to_s
+            if vs = v.as_s?
+              raw[kn] = [vs]
+            elsif va = v.as_a?
+              raw[kn] = va.compact_map(&.as_s?)
+            end
+          end
         end
-        RecipeRequest.new(rname, args)
+        expand_args(raw).map { |combo| RecipeRequest.new(rname, combo) }
+      else
+        [] of RecipeRequest
       end
     end
+  end
+
+  # Produit cartésien des arguments listes → un jeu d'arguments par
+  # combinaison. `{}` → `[{}]` (une exécution, jeu vide) ; `{user: [a, b]}`
+  # → `[{user: a}, {user: b}]` ; `{u: [a, b], t: [x, y]}` → 4 combinaisons.
+  private def self.expand_args(raw : Hash(String, Array(String))) : Array(Hash(String, String))
+    combos = [{} of String => String]
+    raw.each do |key, values|
+      combos = combos.flat_map { |c| values.map { |v| c.merge({key => v}) } }
+    end
+    combos
   end
 
   # Clé(s) publique(s) que beryl utilise pour se connecter, dérivée(s)

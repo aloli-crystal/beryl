@@ -56,27 +56,33 @@ module Beryl::Apply
     def initialize(@shell : Shell, @dry_run : Bool = false, @context : Context = Context.new)
     end
 
-    def run(recipes : Array(Recipe), recipe_args : Hash(String, Hash(String, String)) = {} of String => Hash(String, String)) : Report
+    def run(recipes : Array(Recipe), recipe_args : Hash(String, Array(Hash(String, String))) = {} of String => Array(Hash(String, String))) : Report
       report = Report.new
       recipes.each do |recipe|
-        vars = build_vars(recipe, recipe_args[recipe.name]? || {} of String => String)
-        recipe.steps.each do |step|
-          primitive = Primitive[step.name]? || raise UnknownPrimitive.new(
-            "primitive `#{step.name}` inconnue (recette `#{recipe.name}`). " \
-            "Primitives connues : #{Primitive.registry.keys.sort.join(", ")}."
-          )
-          params = interpolate(step.params, vars)
-          result =
-            begin
-              primitive.apply(@shell, params, @dry_run, @context)
-            rescue ex : SSH::CommandFailed
-              StepResult.failed(ex.message || "commande distante échouée")
-            rescue ex : Primitive::PrimitiveError
-              StepResult.failed(ex.message || "erreur de primitive")
-            end
-          report << Report::Entry.new(recipe: recipe.name, step: step.name, result: result)
-          log("#{recipe.name} › #{step.name} : #{describe(result)}")
-          return report if result.outcome.failed?
+        # Une recette peut être jouée PLUSIEURS fois — un fan-out sur un
+        # argument liste (ex. `oh-my-zsh: { user: [deploy, pne] }` → une
+        # fois par user). Sans args explicites : une seule fois, jeu vide.
+        combos = recipe_args[recipe.name]? || [{} of String => String]
+        combos.each do |combo|
+          vars = build_vars(recipe, combo)
+          recipe.steps.each do |step|
+            primitive = Primitive[step.name]? || raise UnknownPrimitive.new(
+              "primitive `#{step.name}` inconnue (recette `#{recipe.name}`). " \
+              "Primitives connues : #{Primitive.registry.keys.sort.join(", ")}."
+            )
+            params = interpolate(step.params, vars)
+            result =
+              begin
+                primitive.apply(@shell, params, @dry_run, @context)
+              rescue ex : SSH::CommandFailed
+                StepResult.failed(ex.message || "commande distante échouée")
+              rescue ex : Primitive::PrimitiveError
+                StepResult.failed(ex.message || "erreur de primitive")
+              end
+            report << Report::Entry.new(recipe: recipe.name, step: step.name, result: result)
+            log("#{recipe.name} › #{step.name} : #{describe(result)}")
+            return report if result.outcome.failed?
+          end
         end
       end
       report
