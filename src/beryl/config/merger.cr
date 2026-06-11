@@ -173,7 +173,8 @@ module Beryl::Config
       new_users = users_array.map do |user_any|
         user_hash = user_any.as_h
         existing_keys_any = user_hash[YAML::Any.new("ssh_keys")]?
-        existing_raw = (existing_keys_any.try(&.as_a?) || [] of YAML::Any).compact_map(&.as_s?)
+        # Paire de rotation `[a, b]` → on ne garde que l'active (la 1ère).
+        existing_raw = Beryl::Config.deployed_key_names(existing_keys_any.try(&.as_a?) || [] of YAML::Any)
         # Résolution de chaque entrée (nom de fichier → contenu, ou
         # inline tel quel). Les clés déjà présentes dans le domaine
         # sont filtrées pour dédup.

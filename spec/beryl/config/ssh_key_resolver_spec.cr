@@ -49,6 +49,19 @@ describe Beryl::Config do
       result[1].should eq("ssh-ed25519 AAAA inline")
     end
   end
+
+  describe ".deployed_key_names" do
+    it "garde une clé string telle quelle" do
+      entries = [YAML::Any.new("philippe.aloli.fr.pub"), YAML::Any.new("ssh-ed25519 AAAA inline")]
+      Beryl::Config.deployed_key_names(entries).should eq(["philippe.aloli.fr.pub", "ssh-ed25519 AAAA inline"])
+    end
+
+    it "ne garde que la 1ère (active) d'une paire de rotation [active, suivante]" do
+      pair = YAML::Any.new([YAML::Any.new("active.pub"), YAML::Any.new("suivante.pub")])
+      entries = [YAML::Any.new("autre.pub"), pair]
+      Beryl::Config.deployed_key_names(entries).should eq(["autre.pub", "active.pub"])
+    end
+  end
 end
 
 describe Beryl::Config::Root do

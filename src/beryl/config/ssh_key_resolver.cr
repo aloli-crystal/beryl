@@ -44,6 +44,23 @@ module Beryl::Config
     values.map { |v| resolve_ssh_key(v, ssh_dir) }
   end
 
+  # Noms de clés à DÉPLOYER, à partir des entrées brutes `ssh_keys:`.
+  # Chaque entrée est soit :
+  #   * une clé (string)                  → la clé.
+  #   * une PAIRE `[active, suivante]`    → la PREMIÈRE (l'active).
+  # La paire signale une rotation en cours : `beryl apply` ne pose que
+  # l'active ; `beryl rotate-key` promeut la suivante. Les entrées non
+  # exploitables sont ignorées.
+  def self.deployed_key_names(entries : Array(YAML::Any)) : Array(String)
+    entries.compact_map do |e|
+      if (s = e.as_s?)
+        s
+      elsif (a = e.as_a?)
+        a.first?.try(&.as_s?)
+      end
+    end
+  end
+
   class SshKeyNotFound < Exception
   end
 

@@ -370,7 +370,8 @@ module Beryl::CLI::Bootstrap
       next nil unless h
       name = h[YAML::Any.new("name")]?.try(&.as_s?)
       next nil unless name
-      ssh_keys = h[YAML::Any.new("ssh_keys")]?.try(&.as_a?).try(&.compact_map(&.as_s?)) || [] of String
+      # Paire de rotation `[a, b]` → on ne bootstrappe que l'active (1ère).
+      ssh_keys = Beryl::Config.deployed_key_names(h[YAML::Any.new("ssh_keys")]?.try(&.as_a?) || [] of YAML::Any)
       Beryl::Bootstrap::UserSpec.new(
         name: name,
         primary_group: h[YAML::Any.new("primary_group")]?.try(&.as_s?) || "www",

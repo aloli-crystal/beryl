@@ -39,7 +39,9 @@ module Beryl::Config
     def ssh_keys : Array(String)
       value = @raw[YAML::Any.new("ssh_keys")]?
       return [] of String unless value
-      (value.as_a? || [] of YAML::Any).compact_map(&.as_s?)
+      # Une entrée peut être une clé ou une PAIRE de rotation `[a, b]` :
+      # on ne déploie que l'active (la 1ère). cf. ssh_key_resolver.
+      Beryl::Config.deployed_key_names(value.as_a? || [] of YAML::Any)
     end
   end
 end
