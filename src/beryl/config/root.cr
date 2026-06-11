@@ -708,10 +708,10 @@ module Beryl::Config
     class MissingMountpoint < Exception; end
 
     # Construit une `SSH::Connection` prête à l'emploi.
-    def connection : SSH::Connection
+    def connection(user_override : String? = nil) : SSH::Connection
       SSH::Connection.new(
         host: ssh_host,
-        user: user,
+        user: user_override || user,
         port: port,
         identity_file: identity_file,
       )

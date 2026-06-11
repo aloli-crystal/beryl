@@ -154,17 +154,32 @@ module Beryl::CLI::Apply
       return EXIT_OK
     end
 
-    log "cible : #{Beryl.format_ssh_target(host)} (user SSH : #{host.user})"
+    # Connexion comme le PREMIER user sudo-capable de freebsd.users (le
+    # SSH root est coupé sur les hôtes durcis) ; à défaut host.user.
+    ssh_user = sudo_user(host) || host.user
+    log "cible : #{Beryl.format_ssh_target(host)} (user SSH : #{ssh_user})"
     log "recettes (ordre résolu) : #{recipes.map(&.name).join(" → ")}"
 
-    conn = host.connection
+    conn = host.connection(ssh_user)
     uname = conn.exec("uname -s", raise_on_error: false).stdout.strip
     unless uname == "FreeBSD"
-      STDERR.puts "beryl : #{host.fqdn} n'est pas sur FreeBSD (uname -s = #{uname.inspect})"
+      STDERR.puts "beryl : #{host.fqdn} : connexion #{ssh_user}@ impossible ou pas FreeBSD (uname -s = #{uname.inspect})"
       return EXIT_NO_FREEBSD
     end
 
-    shell = Beryl::Apply::SshShell.new(conn)
+    # Escalade : si on n'est pas root, on vérifie que sudo NOPASSWD marche
+    # puis on enrobe le shell pour que les opérations root passent par sudo.
+    shell : Beryl::Apply::Shell
+    if ssh_user == "root"
+      shell = Beryl::Apply::SshShell.new(conn)
+    else
+      unless conn.exec("sudo -n true", raise_on_error: false).success?
+        STDERR.puts "beryl : #{host.fqdn} : #{ssh_user} ne peut pas sudo sans mot de passe " \
+                    "(sudo -n échoue). Vérifiez `%wheel NOPASSWD` + l'appartenance à wheel (ou `sudo: true`)."
+        return EXIT_SSH_FAILED
+      end
+      shell = Beryl::Apply::SudoShell.new(Beryl::Apply::SshShell.new(conn))
+    end
     context = Beryl::Apply::Context.new(
       protected_keys: connecting_pubkeys(host),
       vars: {
@@ -195,6 +210,32 @@ module Beryl::CLI::Apply
   # merge (`local_path`, défaut `<config>/recipes`). Le dépôt central
   # est cloné/maintenu hors de beryl (Phase 1) ; les recettes vivent
   # dans son sous-dossier `recipes/`.
+  # Premier user sudo-capable de `freebsd.users` : `sudo: true` explicite
+  # prime, sinon (champ absent) on déduit de l'appartenance au groupe
+  # `wheel`. nil si aucun → apply retombe sur host.user (root).
+  private def self.sudo_user(host : Beryl::Config::ResolvedHost) : String?
+    freebsd = host.merged[YAML::Any.new("freebsd")]?.try(&.as_h?)
+    return nil unless freebsd
+    users = freebsd[YAML::Any.new("users")]?.try(&.as_a?)
+    return nil unless users
+
+    users.each do |u|
+      uh = u.as_h?
+      next unless uh
+      name = uh[YAML::Any.new("name")]?.try(&.as_s?)
+      next unless name
+      can =
+        if flag = uh[YAML::Any.new("sudo")]?
+          flag.as_bool? == true
+        else
+          groups = uh[YAML::Any.new("secondary_groups")]?.try(&.as_a?)
+          groups.try(&.any? { |g| g.as_s? == "wheel" }) || false
+        end
+      return name if can
+    end
+    nil
+  end
+
   private def self.central_recipes_dir(config_root : String, host : Beryl::Config::ResolvedHost) : String
     block = host.merged[YAML::Any.new("recipes")]?.try(&.as_h?)
     local_path =
