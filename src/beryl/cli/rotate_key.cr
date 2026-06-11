@@ -107,8 +107,22 @@ module Beryl::CLI::RotateKey
       return false
     end
 
-    # Passe 1 : connexion avec l'ACTIVE → pose la suivante (garde l'active).
     conn_a = SSH::Connection.new(host: host.ssh_host, user: user, port: host.port, identity_file: active_priv)
+
+    # Reprise / idempotence : si l'ancienne ne se connecte PLUS mais la
+    # nouvelle OUI, ce (host, user) est DÉJÀ rotationné → succès. Évite de
+    # casser un host déjà fait lors d'un re-run après un échec partiel.
+    unless conn_a.exec("true", raise_on_error: false).success?
+      conn_chk = SSH::Connection.new(host: host.ssh_host, user: user, port: host.port, identity_file: suivante_priv)
+      if conn_chk.exec("true", raise_on_error: false).success?
+        log "  ✓ #{host.fqdn}/#{user} : déjà rotationné (nouvelle clé active)"
+        return true
+      end
+      STDERR.puts "  ✗ #{host.fqdn}/#{user} : ni l'ancienne ni la nouvelle clé ne se connectent"
+      return false
+    end
+
+    # Passe 1 : connexion avec l'ACTIVE → pose la suivante (garde l'active).
     sh_a = Beryl::Apply::SshShell.new(conn_a)
     ctx_a = Beryl::Apply::Context.new(protected_keys: [active_pub])
     r1 = prim.apply(sh_a, params(user, [active_pub, suivante_pub]), false, ctx_a)
