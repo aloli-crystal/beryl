@@ -6,6 +6,7 @@ require "./cli/rescue"
 require "./cli/boot_hd"
 require "./cli/wipe"
 require "./cli/apply"
+require "./cli/rotate_key"
 require "./cli/scan"
 require "./cli/dns"
 require "./cli/init"
@@ -123,6 +124,7 @@ module Beryl::CLI
     when "scan"               then Beryl::CLI::Scan.run(config_root, sub_args)
     when "dns"                then Beryl::CLI::Dns.run(config_root, sub_args)
     when "apply"              then Beryl::CLI::Apply.run(config_root, sub_args)
+    when "rotate-key"         then Beryl::CLI::RotateKey.run(config_root, sub_args)
     when "prep-rescue"        then Beryl::CLI::PrepRescue.run(sub_args)
     when "bake-seed"          then Beryl::CLI::BakeSeed.run(sub_args)
     when "scaleway-reinstall" then Beryl::CLI::ScalewayReinstall.run(config_root, sub_args)
