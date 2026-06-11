@@ -50,6 +50,13 @@ describe Beryl::Apply::Executor do
     TestRecorder.last_params["msg"].as_s.should eq("salut le monde")
   end
 
+  it "les arguments fournis par l'hôte (apply_recipes map) priment sur ceux de la recette" do
+    shell = FakeShell.new
+    host_args = {"recorder" => {"msg" => "bonjour override"}}
+    Beryl::Apply::Executor.new(shell, dry_run: false).run([central_recipe("recorder")], host_args)
+    TestRecorder.last_params["msg"].as_s.should eq("bonjour override")
+  end
+
   it "lève UnknownPrimitive pour un step inconnu" do
     shell = FakeShell.new
     recipe = Beryl::Apply::Recipe.new(

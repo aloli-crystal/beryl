@@ -56,10 +56,10 @@ module Beryl::Apply
     def initialize(@shell : Shell, @dry_run : Bool = false, @context : Context = Context.new)
     end
 
-    def run(recipes : Array(Recipe)) : Report
+    def run(recipes : Array(Recipe), recipe_args : Hash(String, Hash(String, String)) = {} of String => Hash(String, String)) : Report
       report = Report.new
       recipes.each do |recipe|
-        vars = build_vars(recipe)
+        vars = build_vars(recipe, recipe_args[recipe.name]? || {} of String => String)
         recipe.steps.each do |step|
           primitive = Primitive[step.name]? || raise UnknownPrimitive.new(
             "primitive `#{step.name}` inconnue (recette `#{recipe.name}`). " \
@@ -85,7 +85,7 @@ module Beryl::Apply
     # Construit la table des variables scalaires interpolables :
     # défauts déclarés dans `parameters`, écrasés par les `arguments`
     # concrets. Seuls les scalaires string sont retenus (Phase 1).
-    private def build_vars(recipe : Recipe) : Hash(String, String)
+    private def build_vars(recipe : Recipe, extra : Hash(String, String) = {} of String => String) : Hash(String, String)
       vars = {} of String => String
       # Variables built-in de beryl (société, fqdn…) d'abord : disponibles
       # partout, surchargeables par les parameters/arguments de la recette.
@@ -102,6 +102,8 @@ module Beryl::Apply
           vars[key] = s
         end
       end
+      # Arguments fournis par l'hôte (apply_recipes forme map) : priorité max.
+      extra.each { |k, v| vars[k] = v }
       vars
     end
 

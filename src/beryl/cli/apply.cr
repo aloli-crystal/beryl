@@ -84,14 +84,14 @@ module Beryl::CLI::Apply
     # non persistée — ex. une rotation de clé), soit la liste
     # `apply_recipes:` cascadée du merge (état désiré, versionné dans la
     # config société → domaine → host).
-    requested =
+    requests =
       if r = adhoc_recipe
-        [r]
+        [RecipeRequest.new(r, {} of String => String)]
       else
         apply_recipes_list(host)
       end
     resolver = Beryl::Apply::Resolver.new(central_dir)
-    recipes = resolver.resolve(requested)
+    recipes = resolver.resolve(requests.map(&.name))
     if recipes.empty?
       log "aucune recette pour #{host.fqdn} (ni recette en argument, ni `apply_recipes:` dans la config)."
       return EXIT_OK
@@ -117,7 +117,9 @@ module Beryl::CLI::Apply
         "domain"   => host.domain_name,
       },
     )
-    report = Beryl::Apply::Executor.new(shell, dry_run, context).run(recipes)
+    recipe_args = {} of String => Hash(String, String)
+    requests.each { |req| recipe_args[req.name] = req.arguments }
+    report = Beryl::Apply::Executor.new(shell, dry_run, context).run(recipes, recipe_args)
 
     log "apply terminé pour #{host.fqdn}#{dry_run ? " (dry-run)" : ""} — #{report.summary_line}"
     report.failed > 0 ? EXIT_RECIPE : EXIT_OK
@@ -165,13 +167,31 @@ module Beryl::CLI::Apply
     File.join(local_path, "recipes")
   end
 
-  # Liste des recettes d'entrée déclarées en config (`apply_recipes:`),
-  # cascadée par le merge (société → domaine → host, append + dédup comme
-  # `packages`). Vide si absente.
-  private def self.apply_recipes_list(host : Beryl::Config::ResolvedHost) : Array(String)
+  # Une recette demandée + ses arguments éventuels (qui surchargent les
+  # `parameters` de la recette pour CET hôte).
+  record RecipeRequest, name : String, arguments : Hash(String, String)
+
+  # Recettes d'entrée déclarées en config (`apply_recipes:`), cascadées
+  # par le merge (société → domaine → host, append + dédup). Chaque entrée
+  # est soit un NOM (string), soit une map `{recipe: <nom>, arguments:
+  # {clé: valeur}}` — pour passer des arguments (ex. cibler un user
+  # particulier : `{recipe: oh-my-zsh, arguments: {user: pne}}`).
+  private def self.apply_recipes_list(host : Beryl::Config::ResolvedHost) : Array(RecipeRequest)
     any = host.merged[YAML::Any.new("apply_recipes")]?
-    return [] of String unless any
-    (any.as_a? || [] of YAML::Any).compact_map(&.as_s?)
+    return [] of RecipeRequest unless any
+    (any.as_a? || [] of YAML::Any).compact_map do |e|
+      if name = e.as_s?
+        RecipeRequest.new(name, {} of String => String)
+      elsif h = e.as_h?
+        rname = h[YAML::Any.new("recipe")]?.try(&.as_s?)
+        next nil unless rname
+        args = {} of String => String
+        if argh = h[YAML::Any.new("arguments")]?.try(&.as_h?)
+          argh.each { |k, v| args[k.as_s? || k.to_s] = v.as_s? || v.to_s }
+        end
+        RecipeRequest.new(rname, args)
+      end
+    end
   end
 
   # Clé(s) publique(s) que beryl utilise pour se connecter, dérivée(s)
