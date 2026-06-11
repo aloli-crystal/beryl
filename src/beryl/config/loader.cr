@@ -105,50 +105,67 @@ module Beryl::Config
       accounts
     end
 
-    # Charge une société : son `_account.yml` éventuel + ses domaines.
+    # Charge une société : son défaut + ses domaines. Le défaut société est
+    # `_default.yml` (nouvelle convention « _default.yml par dossier »),
+    # sinon `_account.yml` (ancien nom, rétro-compat).
     def self.load_account(name : String, path : String) : Account
-      metadata_path = File.join(path, "_account.yml")
-      metadata = File.exists?(metadata_path) ? parse_yaml_hash(metadata_path) : empty_hash
+      default_path = File.join(path, "_default.yml")
+      legacy_path = File.join(path, "_account.yml")
+      meta_path = File.exists?(default_path) ? default_path : legacy_path
+      metadata = File.exists?(meta_path) ? parse_yaml_hash(meta_path) : empty_hash
       domains = load_domains(path)
       Account.new(name: name, path: path, metadata: metadata, domains: domains)
     end
 
-    # Scanne le dossier d'une société pour identifier les domaines
-    # (fichiers `<domaine>.domain.yml`, hors `_*` et fichiers cachés).
+    # Domaines d'une société, découverts par NOM = union :
+    #   * des SOUS-DOSSIERS `<domaine>/` (nouvelle convention : le dossier
+    #     EST le domaine, son défaut est `<domaine>/_default.yml`) ;
+    #   * des fichiers `<domaine>.domain.yml` (ancien, rétro-compat).
+    # Hors `_*` et fichiers/dossiers cachés.
     def self.load_domains(account_dir : String) : Hash(String, Domain)
-      domains = {} of String => Domain
-
-      Dir.glob(File.join(account_dir, "*#{DOMAIN_SUFFIX}")).sort.each do |yml_path|
+      names = Set(String).new
+      Dir.children(account_dir).each do |entry|
+        next if entry.starts_with?("_") || entry.starts_with?(".")
+        names << entry if File.directory?(File.join(account_dir, entry))
+      end
+      Dir.glob(File.join(account_dir, "*#{DOMAIN_SUFFIX}")).each do |yml_path|
         basename = File.basename(yml_path)
-        next if basename.starts_with?("_")
-        next if basename.starts_with?(".")
-
-        domain_name = basename.rchop(DOMAIN_SUFFIX)
-        domains[domain_name] = load_domain(account_dir, domain_name, yml_path)
+        next if basename.starts_with?("_") || basename.starts_with?(".")
+        names << basename.rchop(DOMAIN_SUFFIX)
       end
 
+      domains = {} of String => Domain
+      names.to_a.sort.each { |name| domains[name] = load_domain(account_dir, name) }
       domains
     end
 
-    # Charge un domaine : son `.yml` + son dossier (hosts directs +
-    # groupes + hosts dans groupes).
-    def self.load_domain(account_dir : String, domain_name : String, yml_path : String) : Domain
-      raw = parse_yaml_hash(yml_path)
-      domain_dir = File.join(account_dir, domain_name)
+    # Charge un domaine `name` : son raw depuis `<name>/_default.yml`
+    # (nouveau) sinon `<name>.domain.yml` (ancien) ; ses hosts/groupes
+    # depuis le dossier `<name>/`.
+    def self.load_domain(account_dir : String, name : String) : Domain
+      domain_dir = File.join(account_dir, name)
+      default_yml = File.join(domain_dir, "_default.yml")
+      legacy_yml = File.join(account_dir, "#{name}#{DOMAIN_SUFFIX}")
+
+      source_path, raw =
+        if File.exists?(default_yml)
+          {default_yml, parse_yaml_hash(default_yml)}
+        elsif File.exists?(legacy_yml)
+          {legacy_yml, parse_yaml_hash(legacy_yml)}
+        else
+          {default_yml, empty_hash}
+        end
 
       direct_hosts = {} of String => HostNode
       groups = {} of String => Group
-
-      if File.directory?(domain_dir)
-        direct_hosts, groups = load_domain_contents(domain_dir)
-      end
+      direct_hosts, groups = load_domain_contents(domain_dir) if File.directory?(domain_dir)
 
       Domain.new(
-        name: domain_name,
+        name: name,
         raw: raw,
         direct_hosts: direct_hosts,
         groups: groups,
-        source_path: yml_path,
+        source_path: source_path,
       )
     end
 
