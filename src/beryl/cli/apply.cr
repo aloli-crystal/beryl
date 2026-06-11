@@ -37,7 +37,7 @@ module Beryl::CLI::Apply
     positional = [] of String
 
     parser = OptionParser.new do |p|
-      p.banner = "USAGE : beryl apply <host> [recette] [options]"
+      p.banner = "USAGE : beryl apply <host|domaine|société> [recette] [options]"
       p.on("-a NAME", "--account=NAME", "Forcer la société (si ambiguë)") { |v| account_hint = v }
       p.on("-d NAME", "--domain=NAME", "Forcer le domaine") { |v| domain_hint = v }
       p.on("-n", "--dry-run", "Affiche ce qui changerait sans l'appliquer") { dry_run = true }
@@ -49,7 +49,7 @@ module Beryl::CLI::Apply
 
     raw = positional.first?
     unless raw
-      STDERR.puts "beryl : hôte non précisé. USAGE : beryl apply <host> [recette]"
+      STDERR.puts "beryl : portée non précisée. USAGE : beryl apply <host|domaine|société> [recette]"
       return EXIT_USAGE
     end
     # 2e positionnel optionnel : une recette nommée à appliquer en
@@ -61,29 +61,86 @@ module Beryl::CLI::Apply
     domain_hint ||= parsed[:domain]
 
     root = Beryl::Config::Root.load(config_root)
-    host = root.resolve(host_name, account_hint: account_hint, domain_hint: domain_hint)
-    host.apply_all_credentials_to_env!
-
-    # Apply est FreeBSD-only dans ce build. L'architecture ADR-014
-    # prévoit des `Os::Debian`, `Os::Ubuntu`, etc. — pas câblés ici.
-    unless host.os == "freebsd"
-      STDERR.puts "beryl : apply n'est implémenté que pour os: freebsd (host : #{host.os})."
+    # Portée : host, domaine OU société (comme rotate-key). `apply quimeo.net`
+    # → tous les hosts du domaine ; `apply quimeo` → toute la société.
+    hosts = resolve_hosts(root, host_name, account_hint, domain_hint)
+    if hosts.empty?
+      STDERR.puts "beryl : portée inconnue : #{raw} (ni host, ni domaine, ni société). " \
+                  "Sociétés configurées : #{root.accounts.keys.sort.join(", ")}"
       return EXIT_USAGE
     end
+    log "portée #{raw} → #{hosts.size} hosts : #{hosts.map(&.short_name).join(", ")}" if hosts.size > 1
 
-    # Un host virtuel (pas de fichier `<host>.host.yml`) n'a pas de
-    # dossier d'orchestration — rien à appliquer.
+    # Une erreur sur un host ne doit pas avorter le reste de la flotte :
+    # apply_one capture ses propres erreurs et renvoie un code EXIT.
+    worst = EXIT_OK
+    hosts.each do |host|
+      rc = apply_one(config_root, host, adhoc_recipe, dry_run)
+      worst = rc unless rc == EXIT_OK
+    end
+    worst
+  rescue ex : Beryl::Config::Root::AmbiguousHost
+    STDERR.puts "beryl : #{ex.message}"
+    EXIT_USAGE
+  rescue ex
+    STDERR.puts "beryl : erreur inattendue — #{ex.class}: #{ex.message}"
+    EXIT_UNEXPECTED
+  end
+
+  # Portée d'apply → liste de hosts. Host d'abord (le plus précis), sinon
+  # domaine (dans toute société, ou celle forcée par -a), sinon société
+  # entière (tous les hosts de tous ses domaines).
+  private def self.resolve_hosts(root : Beryl::Config::Root, scope : String, account_hint : String?, domain_hint : String?) : Array(Beryl::Config::ResolvedHost)
+    begin
+      return [root.resolve(scope, account_hint: account_hint, domain_hint: domain_hint)]
+    rescue Beryl::Config::Root::HostNotFound | Beryl::Config::Root::UnknownDomain
+      # pas un host → on tente domaine puis société.
+    end
+
+    root.accounts.each_value do |account|
+      next if account_hint && account.name != account_hint
+      if domain = account.domain?(scope)
+        return resolve_domain_hosts(root, account, domain)
+      end
+    end
+
+    if account = root.account?(scope)
+      return account.domains.values.flat_map { |domain| resolve_domain_hosts(root, account, domain) }
+    end
+
+    [] of Beryl::Config::ResolvedHost
+  end
+
+  private def self.resolve_domain_hosts(root : Beryl::Config::Root, account : Beryl::Config::Account, domain : Beryl::Config::Domain) : Array(Beryl::Config::ResolvedHost)
+    domain.all_hosts.keys.compact_map do |hn|
+      begin
+        root.resolve(hn, account_hint: account.name, domain_hint: domain.name)
+      rescue
+        nil
+      end
+    end
+  end
+
+  # Applique les recettes à UN host. Retourne un code EXIT. Capture ses
+  # erreurs (recette, SSH…) pour ne pas avorter une boucle de flotte.
+  private def self.apply_one(config_root : String, host : Beryl::Config::ResolvedHost, adhoc_recipe : String?, dry_run : Bool) : Int32
+    host.apply_all_credentials_to_env!
+
+    # Apply est FreeBSD-only dans ce build (ADR-014 prévoit Os::Debian…).
+    unless host.os == "freebsd"
+      STDERR.puts "beryl : #{host.fqdn} ignoré (apply = os: freebsd uniquement, os : #{host.os})."
+      return EXIT_USAGE
+    end
+    # Un host virtuel (pas de `.host.yml`) n'a pas de connexion.
     if host.virtual
-      log "aucune recette pour #{host.fqdn} (host virtuel : pas de fichier .host.yml, donc pas de connexion)."
+      log "#{host.fqdn} : host virtuel, rien à appliquer."
       return EXIT_OK
     end
 
     central_dir = central_recipes_dir(config_root, host)
 
-    # Recettes d'ENTRÉE : soit une recette nommée en argument (one-off,
-    # non persistée — ex. une rotation de clé), soit la liste
-    # `apply_recipes:` cascadée du merge (état désiré, versionné dans la
-    # config société → domaine → host).
+    # Recettes d'ENTRÉE : recette nommée en argument (one-off), sinon la
+    # liste `apply_recipes:` cascadée du merge (état désiré, versionné).
     requests =
       if r = adhoc_recipe
         [RecipeRequest.new(r, {} of String => String)]
@@ -93,7 +150,7 @@ module Beryl::CLI::Apply
     resolver = Beryl::Apply::Resolver.new(central_dir)
     recipes = resolver.resolve(requests.map(&.name).uniq)
     if recipes.empty?
-      log "aucune recette pour #{host.fqdn} (ni recette en argument, ni `apply_recipes:` dans la config)."
+      log "aucune recette pour #{host.fqdn} (ni argument, ni `apply_recipes:`)."
       return EXIT_OK
     end
 
@@ -123,32 +180,14 @@ module Beryl::CLI::Apply
 
     log "apply terminé pour #{host.fqdn}#{dry_run ? " (dry-run)" : ""} — #{report.summary_line}"
     report.failed > 0 ? EXIT_RECIPE : EXIT_OK
-  rescue ex : Beryl::Config::Root::HostNotFound
-    STDERR.puts "beryl : #{ex.message}"
-    EXIT_USAGE
-  rescue ex : Beryl::Config::Root::AmbiguousHost
-    STDERR.puts "beryl : #{ex.message}"
-    EXIT_USAGE
-  rescue ex : Beryl::Config::Root::UnknownDomain
-    STDERR.puts "beryl : #{ex.message}"
-    EXIT_USAGE
-  rescue ex : Beryl::Apply::Resolver::RecipeNotFound
-    STDERR.puts "beryl : #{ex.message}"
-    EXIT_RECIPE
-  rescue ex : Beryl::Apply::Resolver::Cycle
-    STDERR.puts "beryl : #{ex.message}"
-    EXIT_RECIPE
-  rescue ex : Beryl::Apply::Recipe::InvalidRecipe
-    STDERR.puts "beryl : #{ex.message}"
-    EXIT_RECIPE
-  rescue ex : Beryl::Apply::UnknownPrimitive
-    STDERR.puts "beryl : #{ex.message}"
+  rescue ex : Beryl::Apply::Resolver::RecipeNotFound | Beryl::Apply::Resolver::Cycle | Beryl::Apply::Recipe::InvalidRecipe | Beryl::Apply::UnknownPrimitive
+    STDERR.puts "beryl : #{host.fqdn} : #{ex.message}"
     EXIT_RECIPE
   rescue ex : SSH::CommandFailed
-    STDERR.puts "beryl : #{ex.message}"
+    STDERR.puts "beryl : #{host.fqdn} : #{ex.message}"
     EXIT_SSH_FAILED
   rescue ex
-    STDERR.puts "beryl : erreur inattendue — #{ex.class}: #{ex.message}"
+    STDERR.puts "beryl : #{host.fqdn} : erreur inattendue — #{ex.class}: #{ex.message}"
     EXIT_UNEXPECTED
   end
 
