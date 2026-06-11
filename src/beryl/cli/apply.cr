@@ -149,8 +149,16 @@ module Beryl::CLI::Apply
       end
     resolver = Beryl::Apply::Resolver.new(central_dir)
     recipes = resolver.resolve(requests.map(&.name).uniq)
+
+    # Réconciliation des comptes : phase intégrée (sauf mode ad-hoc),
+    # pilotée par `freebsd.users` — TOUJOURS, même sans apply_recipes. La
+    # liste users devient source unique : bootstrap crée, apply réconcilie.
+    if !adhoc_recipe && (users_recipe = build_users_recipe(host))
+      recipes = [users_recipe] + recipes
+    end
+
     if recipes.empty?
-      log "aucune recette pour #{host.fqdn} (ni argument, ni `apply_recipes:`)."
+      log "aucune recette ni user à réconcilier pour #{host.fqdn}."
       return EXIT_OK
     end
 
@@ -234,6 +242,34 @@ module Beryl::CLI::Apply
       return name if can
     end
     nil
+  end
+
+  # Recette synthétique de réconciliation des comptes, construite depuis
+  # `freebsd.users` : un step `user-sync` par user déclaré. nil si aucun.
+  private def self.build_users_recipe(host : Beryl::Config::ResolvedHost) : Beryl::Apply::Recipe?
+    freebsd = host.merged[YAML::Any.new("freebsd")]?.try(&.as_h?)
+    return nil unless freebsd
+    users = freebsd[YAML::Any.new("users")]?.try(&.as_a?)
+    return nil unless users
+
+    steps = users.compact_map do |u|
+      uh = u.as_h?
+      next nil unless uh && uh[YAML::Any.new("name")]?
+      params = {} of String => YAML::Any
+      uh.each { |k, v| params[k.as_s? || k.to_s] = v }
+      Beryl::Apply::Step.new(name: "user-sync", params: params)
+    end
+    return nil if steps.empty?
+
+    Beryl::Apply::Recipe.new(
+      name: "users",
+      description: "Réconciliation des comptes (freebsd.users)",
+      requires: [] of String,
+      parameters: {} of String => YAML::Any,
+      arguments: {} of String => YAML::Any,
+      steps: steps,
+      source_path: "<built-in>",
+    )
   end
 
   private def self.central_recipes_dir(config_root : String, host : Beryl::Config::ResolvedHost) : String
