@@ -24,6 +24,7 @@ BOOT_DISKS="__BOOT_DISKS__"
 BOOT_RAID="__BOOT_RAID__"
 POOL="__POOL_NAME__"
 HOSTNAME="__HOSTNAME__"
+FQDN="__FQDN__"
 ABI="__ABI__"
 SWAP_GB="__SWAP_GB__"
 BOOT_ASHIFT="__BOOT_ASHIFT__"
@@ -236,18 +237,22 @@ printf '%s\n' "${USERS_TSV}" | while IFS='|' read -r UNAME PGROUP SGROUPS USHELL
   [ -n "${SGROUPS}" ] && GFLAG="-G ${SGROUPS}"
   # shellcheck disable=SC2086
   pw -R /mnt useradd -n "${UNAME}" -d "/home/${UNAME}" -g "${PGROUP}" ${GFLAG} -m -s "${USHELL}"
+  mkdir -p "/mnt/home/${UNAME}/.ssh"
   if [ -n "${UKEYS}" ]; then
-    mkdir -p "/mnt/home/${UNAME}/.ssh"
     echo "${UKEYS}" | tr ',' '\n' | while read -r K; do
       [ -z "${K}" ] && continue
       echo "${K}" >> "/mnt/home/${UNAME}/.ssh/authorized_keys"
     done
-    UID_NEW=$(pw -R /mnt usershow "${UNAME}" | cut -d: -f3)
-    GID_PG=$(pw -R /mnt groupshow "${PGROUP}" | cut -d: -f3)
-    chown -R "${UID_NEW}:${GID_PG}" "/mnt/home/${UNAME}/.ssh"
-    chmod 700 "/mnt/home/${UNAME}/.ssh"
-    chmod 600 "/mnt/home/${UNAME}/.ssh/authorized_keys"
   fi
+  # Clé d'identité du user (ed25519, commentaire user@fqdn), générée si absente.
+  [ -f "/mnt/home/${UNAME}/.ssh/id_ed25519" ] || \
+    ssh-keygen -t ed25519 -C "${UNAME}@${FQDN}" -f "/mnt/home/${UNAME}/.ssh/id_ed25519" -N "" -q
+  UID_NEW=$(pw -R /mnt usershow "${UNAME}" | cut -d: -f3)
+  GID_PG=$(pw -R /mnt groupshow "${PGROUP}" | cut -d: -f3)
+  chown -R "${UID_NEW}:${GID_PG}" "/mnt/home/${UNAME}/.ssh"
+  chmod 700 "/mnt/home/${UNAME}/.ssh"
+  [ -f "/mnt/home/${UNAME}/.ssh/authorized_keys" ] && chmod 600 "/mnt/home/${UNAME}/.ssh/authorized_keys"
+  chmod 600 "/mnt/home/${UNAME}/.ssh/id_ed25519"
 done
 
 echo "==> [beryl] Garde anti-lock-out : au moins un user avec clé SSH"

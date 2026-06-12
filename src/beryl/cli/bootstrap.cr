@@ -304,6 +304,7 @@ module Beryl::CLI::Bootstrap
       disks: disks,
       raid: raid,
       hostname: hostname,
+      fqdn: host.fqdn,
       users: users,
       packages: packages,
       sudoers: sudoers,

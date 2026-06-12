@@ -255,12 +255,15 @@ module Beryl::CLI::Apply
     users = freebsd[YAML::Any.new("users")]?.try(&.as_a?)
     return nil unless users
 
-    steps = users.compact_map do |u|
-      uh = u.as_h?
-      next nil unless uh && uh[YAML::Any.new("name")]?
+    steps = [] of Beryl::Apply::Step
+    users.each do |u|
+      next unless uh = u.as_h?
+      next unless name_any = uh[YAML::Any.new("name")]?
       params = {} of String => YAML::Any
       uh.each { |k, v| params[k.as_s? || k.to_s] = v }
-      Beryl::Apply::Step.new(name: "user-sync", params: params)
+      steps << Beryl::Apply::Step.new(name: "user-sync", params: params)
+      # Clé d'identité du user (générée sur le serveur, idempotent).
+      steps << Beryl::Apply::Step.new(name: "user-ssh-key", params: {"name" => name_any})
     end
     return nil if steps.empty?
 

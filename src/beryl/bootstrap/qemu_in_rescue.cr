@@ -235,7 +235,11 @@ module Beryl::Bootstrap
       # boot), détecté côté rescue par beryl. Défaut 12 (4 K) si non fourni.
       @boot_ashift : Int32 = 12,
       @follow_hint_host_name : String? = nil,
+      # FQDN du host (ex. han.quimeo.net) — pour le commentaire des clés
+      # d'identité user générées au bootstrap. Défaut : @hostname.
+      @fqdn : String = "",
     )
+      @fqdn = @hostname if @fqdn.empty?
       raise ArgumentError.new("disks ne peut pas être vide") if @disks.empty?
       raise ArgumentError.new("hostname requis") if @hostname.empty?
       raise ArgumentError.new("freebsd_version requis") if @freebsd_version.empty?
@@ -376,6 +380,7 @@ module Beryl::Bootstrap
         .gsub("__FREEBSD_VERSION__", @freebsd_version)
         .gsub("__ABI__", @abi)
         .gsub("__HOSTNAME__", @hostname)
+        .gsub("__FQDN__", @fqdn)
         .gsub("__TIMEZONE__", @timezone)
         .gsub("__USERS_TSV__", @users.map(&.to_tsv).join("\n"))
         .gsub("__PACKAGES__", @packages.join(" "))
@@ -398,6 +403,7 @@ module Beryl::Bootstrap
         .gsub("__BOOT_RAID__", @raid)
         .gsub("__POOL_NAME__", @pool_name)
         .gsub("__HOSTNAME__", @hostname)
+        .gsub("__FQDN__", @fqdn)
         .gsub("__ABI__", @abi)
         .gsub("__SWAP_GB__", @swap_gb.to_s)
         .gsub("__BOOT_ASHIFT__", @boot_ashift.to_s)

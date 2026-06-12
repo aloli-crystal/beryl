@@ -36,6 +36,7 @@ DISTSITE="__DISTSITE__"
 FREEBSD_VERSION="__FREEBSD_VERSION__"
 ABI="__ABI__"
 HOSTNAME="__HOSTNAME__"
+FQDN="__FQDN__"
 TIMEZONE="__TIMEZONE__"
 
 # Post-install config passé en clair (sans base64, on reste shell-natif).
@@ -225,25 +226,22 @@ echo "$USERS_TSV" | while IFS='|' read -r UNAME PGROUP SGROUPS USHELL UKEYS; do
   # User
   GFLAG=""; [ -n "$SGROUPS" ] && GFLAG="-G $SGROUPS"
   ssh_vm "pw -R /mnt useradd -n $UNAME -d /home/$UNAME -g $PGROUP $GFLAG -m -s $USHELL"
-  # Clés SSH
+  # /mnt/home peut être un dataset ZFS dédié OU un répertoire du dataset
+  # racine. Dans les deux cas on crée le dossier .ssh du user.
+  ssh_vm "mkdir -p /mnt/home/$UNAME/.ssh"
+  # Clés SSH de connexion (authorized_keys). Bug potentiel : ssh dans un
+  # pipe while consomme le stdin du pipe → on isole avec `< /dev/null`.
   if [ -n "$UKEYS" ]; then
-    # /mnt/home peut être un dataset ZFS dédié (`zroot/home` monté
-    # sur /mnt/home par `zfs mount -a` étape 4) OU un répertoire du
-    # dataset racine. Dans les deux cas on crée le dossier user, mais
-    # on log le dataset sous-jacent pour diagnostic.
-    ssh_vm "mkdir -p /mnt/home/$UNAME/.ssh"
-    # Bug potentiel : ssh dans un pipe while peut consommer le stdin
-    # du pipe. On redirige `< /dev/null` pour isoler.
     echo "$UKEYS" | tr ',' '\n' | while read -r K; do
       [ -z "$K" ] && continue
       ssh_vm "echo '$K' >> /mnt/home/$UNAME/.ssh/authorized_keys" < /dev/null
     done
-    UID_NEW=$(ssh_vm "pw -R /mnt usershow $UNAME" | cut -d: -f3)
-    GID_PG=$(ssh_vm "pw -R /mnt groupshow $PGROUP" | cut -d: -f3)
-    ssh_vm "chown -R $UID_NEW:$GID_PG /mnt/home/$UNAME/.ssh && \
-            chmod 700 /mnt/home/$UNAME/.ssh && \
-            chmod 600 /mnt/home/$UNAME/.ssh/authorized_keys"
   fi
+  # Clé d'identité du user (ed25519, commentaire user@fqdn), si absente.
+  ssh_vm "[ -f /mnt/home/$UNAME/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -C $UNAME@$FQDN -f /mnt/home/$UNAME/.ssh/id_ed25519 -N '' -q" < /dev/null
+  UID_NEW=$(ssh_vm "pw -R /mnt usershow $UNAME" | cut -d: -f3)
+  GID_PG=$(ssh_vm "pw -R /mnt groupshow $PGROUP" | cut -d: -f3)
+  ssh_vm "chown -R $UID_NEW:$GID_PG /mnt/home/$UNAME/.ssh; chmod 700 /mnt/home/$UNAME/.ssh; chmod 600 /mnt/home/$UNAME/.ssh/id_ed25519; [ -f /mnt/home/$UNAME/.ssh/authorized_keys ] && chmod 600 /mnt/home/$UNAME/.ssh/authorized_keys"
 done
 
 # ----------------------------------------------------------------------
