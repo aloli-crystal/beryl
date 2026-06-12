@@ -7,9 +7,19 @@ module Beryl::Apply
   abstract class ServicePrimitive < Primitive
     # `sysrc -n <svc>_enable` vaut-il YES ? (exit 1 si la variable
     # n'est pas posée → considéré non activé).
-    protected def enabled?(shell : Shell, svc : String) : Bool
-      out = shell.exec("sysrc -n #{Process.quote("#{svc}_enable")} 2>/dev/null", raise_on_error: false).stdout
+    protected def enabled?(shell : Shell, svc : String, enable_var : String? = nil) : Bool
+      var = enable_var || "#{svc}_enable"
+      out = shell.exec("sysrc -n #{Process.quote(var)} 2>/dev/null", raise_on_error: false).stdout
       out.strip.upcase == "YES"
+    end
+
+    # Le script rc du service existe-t-il ? (base ou ports). Sert au
+    # garde-fou `if_present` : un service non installé n'est pas une erreur.
+    protected def rc_present?(shell : Shell, svc : String) : Bool
+      shell.exec(
+        "test -f #{Process.quote("/usr/local/etc/rc.d/#{svc}")} -o -f #{Process.quote("/etc/rc.d/#{svc}")}",
+        raise_on_error: false,
+      ).success?
     end
 
     # `service <svc> onestatus` retourne 0 si le service tourne.
@@ -32,8 +42,18 @@ module Beryl::Apply
     def apply(shell : Shell, params : Hash(String, YAML::Any), dry_run : Bool, context : Context) : StepResult
       svc = required_string(params, "name")
       start = bool(params, "start", default: true)
+      # Variable rc à poser (défaut `<svc>_enable`). Override utile quand le
+      # script rc et la variable diffèrent (ex. mariadb : script mysql-server,
+      # variable mysql_enable).
+      enable_var = string(params, "enable_var") || "#{svc}_enable"
 
-      already_enabled = enabled?(shell, svc)
+      # Garde-fou : si le service n'a pas de script rc (paquet non installé,
+      # ex. `only: client`), on ne fait RIEN — ce n'est pas une erreur.
+      if bool(params, "if_present", default: false) && !rc_present?(shell, svc)
+        return StepResult.skipped("#{svc} : service absent (paquet non installé) — ignoré")
+      end
+
+      already_enabled = enabled?(shell, svc, enable_var)
       is_running = running?(shell, svc)
       need_enable = !already_enabled
       need_start = start && !is_running
@@ -48,7 +68,7 @@ module Beryl::Apply
       msg = "#{svc} : #{actions.join(" + ")}"
       return StepResult.applied("#{msg} (dry-run)") if dry_run
 
-      shell.exec("sysrc #{Process.quote("#{svc}_enable=YES")}") if need_enable
+      shell.exec("sysrc #{Process.quote("#{enable_var}=YES")}") if need_enable
       shell.exec("service #{Process.quote(svc)} start") if need_start
       StepResult.applied(msg)
     end

@@ -18,4 +18,12 @@ describe Beryl::Apply::PostgresqlInitdb do
     result.outcome.should eq(Beryl::Apply::Outcome::Skipped)
     shell.ran?(/initdb/).should be_false
   end
+
+  it "skip si le serveur PostgreSQL n'est pas installé (only: client)" do
+    shell = FakeShell.new
+    shell.stub(%r{test -f /usr/local/etc/rc.d/postgresql}, exit_code: 1)
+    result = prim("postgresql-initdb").apply(shell, apply_params("{}"), dry_run: false, context: ctx)
+    result.outcome.should eq(Beryl::Apply::Outcome::Skipped)
+    shell.ran?(/initdb/).should be_false
+  end
 end

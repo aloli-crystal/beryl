@@ -31,6 +31,26 @@ describe Beryl::Apply::ServiceEnable do
     shell.ran?(/sysrc nginx_enable=YES/).should be_true
     shell.ran?(/service nginx start/).should be_false
   end
+
+  it "if_present: skip (sans rien lancer) si le service n'a pas de script rc" do
+    shell = FakeShell.new
+    shell.stub(%r{test -f /usr/local/etc/rc.d}, exit_code: 1) # pas de script rc (only: client)
+    result = prim("service-enable").apply(
+      shell, apply_params("{name: mysql-server, if_present: true}"), dry_run: false, context: ctx)
+    result.outcome.should eq(Beryl::Apply::Outcome::Skipped)
+    shell.ran?(/service .* start/).should be_false
+    shell.ran?(/sysrc/).should be_false
+  end
+
+  it "pose la variable enable_var quand elle diffère du nom du service" do
+    shell = FakeShell.new
+    shell.stub(/sysrc -n mysql_enable/, stdout: "NO")
+    shell.stub(/onestatus/, exit_code: 1)
+    prim("service-enable").apply(
+      shell, apply_params("{name: mysql-server, enable_var: mysql_enable, start: false}"), dry_run: false, context: ctx)
+    shell.ran?(/sysrc mysql_enable=YES/).should be_true
+    shell.ran?(/sysrc mysql-server_enable/).should be_false
+  end
 end
 
 describe Beryl::Apply::ServiceDisable do
