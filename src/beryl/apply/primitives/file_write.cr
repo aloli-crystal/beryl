@@ -47,9 +47,17 @@ module Beryl::Apply
       msg = "#{path} : #{actions.join(", ")}"
       return StepResult.applied("#{msg} (dry-run)") if dry_run
 
+      # write_file (re)crée le fichier appartenant à root (écriture via
+      # sudo/SFTP) avec un mode par défaut → après TOUTE écriture il faut
+      # re-poser mode ET owner, même s'ils « correspondaient » avant (sinon
+      # ils repassent à root/0644 à chaque changement de contenu).
       shell.write_file(path, content) if need_write
-      shell.exec("chmod #{Process.quote(mode.not_nil!)} #{Process.quote(path)}") if need_chmod
-      shell.exec("chown #{Process.quote(owner.not_nil!)} #{Process.quote(path)}") if need_chown
+      if mode && (need_chmod || need_write)
+        shell.exec("chmod #{Process.quote(mode)} #{Process.quote(path)}")
+      end
+      if owner && (need_chown || need_write)
+        shell.exec("chown #{Process.quote(owner)} #{Process.quote(path)}")
+      end
       StepResult.applied(msg)
     end
 

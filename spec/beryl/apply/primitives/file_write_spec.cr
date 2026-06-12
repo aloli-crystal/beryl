@@ -33,6 +33,18 @@ describe Beryl::Apply::FileWrite do
     shell.ran?(/chown deploy/).should be_true
   end
 
+  it "re-pose owner après une écriture, même si l'owner correspondait déjà" do
+    content = "nouveau\n"
+    shell = FakeShell.new
+    shell.stub(/sha256 -q/, stdout: "ancien-hash-different") # contenu change → écriture
+    shell.stub(/stat -f %Su/, stdout: "deploy")              # owner déjà deploy (correspond)
+    result = prim("file-write").apply(shell, apply_params({path: "/home/deploy/.zshrc", content: content, owner: "deploy"}.to_yaml), dry_run: false, context: ctx)
+    result.outcome.should eq(Beryl::Apply::Outcome::Applied)
+    shell.writes.size.should eq(1)
+    # write_file recrée le fichier en root → chown DOIT être rejoué.
+    shell.ran?(%r{chown deploy /home/deploy/.zshrc}).should be_true
+  end
+
   it "file-template se comporte comme file-write" do
     shell = FakeShell.new
     shell.stub(/sha256 -q/, stdout: "")
