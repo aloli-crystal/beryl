@@ -375,7 +375,9 @@ module Beryl::CLI::Bootstrap
       Beryl::Bootstrap::UserSpec.new(
         name: name,
         primary_group: h[YAML::Any.new("primary_group")]?.try(&.as_s?) || "www",
-        secondary_groups: (h[YAML::Any.new("secondary_groups")]?.try(&.as_a?).try(&.compact_map(&.as_s?)) || [] of String),
+        # `secondary_groups` (canonique) + alias `groups` (comme user-sync).
+        secondary_groups: ((h[YAML::Any.new("secondary_groups")]?.try(&.as_a?).try(&.compact_map(&.as_s?)) || [] of String) +
+                           (h[YAML::Any.new("groups")]?.try(&.as_a?).try(&.compact_map(&.as_s?)) || [] of String)).uniq,
         shell: h[YAML::Any.new("shell")]?.try(&.as_s?) || "/bin/csh",
         ssh_keys: ssh_keys,
       )

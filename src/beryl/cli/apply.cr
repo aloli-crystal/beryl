@@ -236,8 +236,11 @@ module Beryl::CLI::Apply
         if flag = uh[YAML::Any.new("sudo")]?
           flag.as_bool? == true
         else
-          groups = uh[YAML::Any.new("secondary_groups")]?.try(&.as_a?)
-          groups.try(&.any? { |g| g.as_s? == "wheel" }) || false
+          # `secondary_groups` (canonique) OU alias `groups` — même
+          # tolérance que user-sync, sinon le user de connexion diffère.
+          {"secondary_groups", "groups"}.any? do |key|
+            uh[YAML::Any.new(key)]?.try(&.as_a?).try(&.any? { |g| g.as_s? == "wheel" }) || false
+          end
         end
       return name if can
     end
