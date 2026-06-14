@@ -49,20 +49,36 @@ module Beryl::Apply
 
       rc_var = "ifconfig_#{iface}"
       rc_val = "inet #{ip} netmask #{netmask}"
-      has_ip = shell.exec(
-        "ifconfig #{Process.quote(iface)} inet 2>/dev/null | grep -qw #{Process.quote(ip)}",
+      # IPv4 actuellement portées par l'iface (l'IPv6 link-local est ignorée).
+      current_ips = shell.exec(
+        "ifconfig #{Process.quote(iface)} inet 2>/dev/null | awk '/inet /{print $2}'",
         raise_on_error: false,
-      ).success?
+      ).stdout.split
       rc_current = shell.exec("sysrc -n #{Process.quote(rc_var)} 2>/dev/null", raise_on_error: false).stdout.strip
 
-      if has_ip && rc_current == rc_val
+      # Idempotent : l'iface porte EXACTEMENT l'IP voulue (et rien d'autre)
+      # ET rc.conf est à jour. Le « rien d'autre » est crucial : un
+      # changement d'IP doit FAIRE DISPARAÎTRE l'ancienne (sinon elle
+      # subsistait en alias et l'apply semblait sans effet — bug constaté).
+      if current_ips == [ip] && rc_current == rc_val
         return StepResult.skipped("#{iface} déjà à #{ip}")
       end
-      return StepResult.applied("#{iface} → #{ip} netmask #{netmask} (dry-run)") if dry_run
 
-      shell.exec("sysrc #{Process.quote("#{rc_var}=#{rc_val}")}")                                                # persistance (boot)
+      stale = current_ips.reject { |a| a == ip }
+      if dry_run
+        delta = stale.empty? ? "#{iface} → #{ip}" : "#{iface} → #{ip} (retire #{stale.join(", ")})"
+        return StepResult.applied("#{delta} netmask #{netmask} (dry-run)")
+      end
+
+      shell.exec("sysrc #{Process.quote("#{rc_var}=#{rc_val}")}") # persistance (boot)
+      # netif gère l'UNIQUE IPv4 de cette interface privée → on retire toute
+      # autre IPv4 (notamment l'ancienne lors d'un changement d'IP).
+      stale.each do |old|
+        shell.exec("ifconfig #{Process.quote(iface)} inet #{Process.quote(old)} -alias", raise_on_error: false)
+      end
       shell.exec("ifconfig #{Process.quote(iface)} inet #{Process.quote(ip)} netmask #{Process.quote(netmask)}") # immédiat
-      StepResult.applied("#{iface} configuré : #{ip} netmask #{netmask}")
+      done = stale.empty? ? "#{iface} configuré : #{ip}" : "#{iface} : #{stale.join(", ")} → #{ip}"
+      StepResult.applied("#{done} netmask #{netmask}")
     end
 
     # Détecte le(s) NIC vRack candidats : interface Ethernet physique
