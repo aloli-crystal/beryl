@@ -17,10 +17,25 @@ module Beryl::Apply
     end
 
     def apply(shell : Shell, params : Hash(String, YAML::Any), dry_run : Bool, context : Context) : StepResult
-      iface = required_string(params, "iface")
+      iface = (string(params, "iface") || "auto").strip
       ip = required_string(params, "ip")
       return StepResult.failed("`ip` requis (IP privée du host sur le réseau)") if ip.empty?
       netmask = string(params, "netmask") || "255.255.255.0"
+
+      # Auto-détection (iface vide ou "auto") : le NIC vRack = la SEULE
+      # interface Ethernet physique `status: active` SANS IPv4 (l'interface
+      # publique en a une ; l'USB/IPMI `ue*`, le loopback et les ifaces
+      # virtuelles sont exclus). Ambiguïté ou absence → on exige un `iface:`.
+      if iface.empty? || iface == "auto"
+        candidates = detect_vrack_iface(shell)
+        case candidates.size
+        when 1 then iface = candidates.first
+        when 0
+          return StepResult.failed("auto-détection : aucune interface Ethernet active sans IPv4 — précisez `iface:` explicitement")
+        else
+          return StepResult.failed("auto-détection ambiguë (#{candidates.join(", ")}) — précisez `iface:`")
+        end
+      end
 
       # L'interface doit EXISTER avant toute écriture : sinon netif
       # laisserait un `ifconfig_<iface>` parasite dans rc.conf (warning au
@@ -48,6 +63,19 @@ module Beryl::Apply
       shell.exec("sysrc #{Process.quote("#{rc_var}=#{rc_val}")}")                                                # persistance (boot)
       shell.exec("ifconfig #{Process.quote(iface)} inet #{Process.quote(ip)} netmask #{Process.quote(netmask)}") # immédiat
       StepResult.applied("#{iface} configuré : #{ip} netmask #{netmask}")
+    end
+
+    # Détecte le(s) NIC vRack candidats : interface Ethernet physique
+    # `status: active` SANS adresse IPv4 (l'IPv6 link-local ne compte pas).
+    # Exclut loopback, USB/IPMI (`ue*`) et interfaces virtuelles. Le caller
+    # n'accepte la détection que si elle renvoie EXACTEMENT un candidat.
+    private def detect_vrack_iface(shell : Shell) : Array(String)
+      script = "for i in $(ifconfig -l ether 2>/dev/null); do " \
+               "case \"$i\" in ue*|lo*|tap*|tun*|bridge*|vlan*|wg*) continue;; esac; " \
+               "ifconfig \"$i\" 2>/dev/null | grep -q 'status: active' || continue; " \
+               "ifconfig \"$i\" 2>/dev/null | grep -qw inet && continue; " \
+               "echo \"$i\"; done"
+      shell.exec(script, raise_on_error: false).stdout.split
     end
   end
 
