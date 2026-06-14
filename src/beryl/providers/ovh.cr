@@ -89,6 +89,45 @@ module Beryl::Providers
       status == "done"
     end
 
+    # --- vRack (réseau privé OVH) ---
+
+    # Noms de service des vRacks du compte (ex. "pn-12345").
+    def list_vracks : Array(String)
+      resp = client.call("GET", "/vrack")
+      resp ? resp.as_a.compact_map(&.as_s?) : [] of String
+    end
+
+    # Serveurs dédiés rattachés à un vRack (noms de service).
+    def vrack_dedicated_servers(vrack : String) : Array(String)
+      resp = client.call("GET", "/vrack/#{vrack}/dedicatedServer")
+      resp ? resp.as_a.compact_map(&.as_s?) : [] of String
+    end
+
+    # Le vRack contenant ce serveur, nil si aucun.
+    def vrack_of_server(service_name : String) : String?
+      list_vracks.find { |v| vrack_dedicated_servers(v).includes?(service_name) }
+    end
+
+    # Rattache un serveur dédié à un vRack. Retourne l'id de la task async
+    # (chaîne vide si l'API ne renvoie pas d'id).
+    def attach_dedicated_server(vrack : String, service_name : String) : String
+      resp = client.call(
+        "POST", "/vrack/#{vrack}/dedicatedServer",
+        body: {"dedicatedServer" => service_name},
+      )
+      id = resp.try(&.["id"]?)
+      id ? id.to_s : ""
+    end
+
+    # Statut d'une task vRack ("todo" / "doing" / "done" / "error"…). nil si
+    # introuvable (souvent : la task est terminée et OVH l'a purgée).
+    def vrack_task_status(vrack : String, task_id : String) : String?
+      resp = client.call("GET", "/vrack/#{vrack}/task/#{task_id}")
+      resp.try(&.["status"]?).try(&.as_s?)
+    rescue
+      nil
+    end
+
     def available? : Bool
       ENV["OVH_APPLICATION_KEY"]? && ENV["OVH_APPLICATION_SECRET"]? && ENV["OVH_CONSUMER_KEY"]? ? true : false
     end
@@ -186,7 +225,10 @@ module Beryl::Providers
         {verb: "POST", path: "/domain/zone/*/refresh"},
         {verb: "PUT", path: "/ip/*/reverse"},
         {verb: "POST", path: "/ip/*/reverse"},
-        {verb: "PUT", path: "/services/*"}, # displayName rename (avril 2026)
+        {verb: "PUT", path: "/services/*"},               # displayName rename (avril 2026)
+        {verb: "GET", path: "/vrack"},                    # liste des vRacks
+        {verb: "GET", path: "/vrack/*"},                  # serveurs du vRack + tasks
+        {verb: "POST", path: "/vrack/*/dedicatedServer"}, # rattacher un serveur
       ]
     end
 
