@@ -175,6 +175,12 @@ describe Beryl::Config::ResolvedHost do
     rh.connection.user.should eq("root")
   end
 
+  it "passe `proxy_jump:` à ssh via -o ProxyJump (bastion vRack)" do
+    rh = Beryl::Config::Root.load(fixture("ssh-host-override")).resolve("clientvm")
+    rh.proxy_jump.should eq("deploy@bastion.example.net")
+    rh.connection.ssh_args("true").should contain("ProxyJump=deploy@bastion.example.net")
+  end
+
   it "expose les accesseurs freebsd (hostname, disks, timezone)" do
     rh = Beryl::Config::Root.load(fixture("with-defaults-and-env")).resolve(
       "quelconque", domain_hint: "aloli.net")

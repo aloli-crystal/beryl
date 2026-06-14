@@ -499,6 +499,16 @@ module Beryl::Config
       @merged[YAML::Any.new("user")]?.try(&.as_s?) || "root"
     end
 
+    # Hôte de rebond SSH (bastion) pour joindre ce host, ex.
+    # `deploy@zsbg.quimeo.net`. Passé à ssh via `-o ProxyJump=…` (donc
+    # aussi à scp). INDISPENSABLE pour les hôtes cachés derrière le vRack
+    # (port 22 public fermé) : beryl ne les joint plus qu'à travers un
+    # bastion z. À combiner avec `ssh_host:` = IP vRack du host. nil =
+    # connexion directe (cas par défaut).
+    def proxy_jump : String?
+      @merged[YAML::Any.new("proxy_jump")]?.try(&.as_s?)
+    end
+
     # Chemin de la clé privée SSH à utiliser pour ce host.
     #
     # Ordre de résolution :
@@ -709,11 +719,16 @@ module Beryl::Config
 
     # Construit une `SSH::Connection` prête à l'emploi.
     def connection(user_override : String? = nil) : SSH::Connection
+      opts = {} of String => String
+      if pj = proxy_jump
+        opts["ProxyJump"] = pj
+      end
       SSH::Connection.new(
         host: ssh_host,
         user: user_override || user,
         port: port,
         identity_file: identity_file,
+        options: opts,
       )
     end
 
