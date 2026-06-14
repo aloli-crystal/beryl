@@ -97,23 +97,38 @@ module Beryl::Providers
       resp ? resp.as_a.compact_map(&.as_s?) : [] of String
     end
 
-    # Serveurs dédiés rattachés à un vRack (noms de service).
-    def vrack_dedicated_servers(vrack : String) : Array(String)
-      resp = client.call("GET", "/vrack/#{vrack}/dedicatedServer")
-      resp ? resp.as_a.compact_map(&.as_s?) : [] of String
+    # Interface vRack d'un serveur (modèle vRack 2.0) : {uuid, vRack-actuel
+    # ou nil}. nil si le serveur n'a aucune interface en mode `vrack`
+    # (gamme sans support vRack). OVH a deux modèles : legacy
+    # (`dedicatedServer`, par nom) et 2.0 (`dedicatedServerInterface`, par
+    # UUID d'interface) — les serveurs récents (double NIC) sont en 2.0.
+    def vrack_interface(service_name : String) : Tuple(String, String?)?
+      uuids = client.call("GET", "/dedicated/server/#{service_name}/virtualNetworkInterface")
+      return nil unless uuids
+      uuids.as_a.each do |u|
+        uuid = u.as_s?
+        next unless uuid
+        iface = client.call("GET", "/dedicated/server/#{service_name}/virtualNetworkInterface/#{uuid}")
+        next unless iface
+        mode = iface["mode"]?.try(&.as_s?) || ""
+        return {uuid, iface["vrack"]?.try(&.as_s?)} if mode.includes?("vrack")
+      end
+      nil
     end
 
-    # Le vRack contenant ce serveur, nil si aucun.
+    # Le vRack contenant ce serveur (via son interface vRack), nil si aucun.
     def vrack_of_server(service_name : String) : String?
-      list_vracks.find { |v| vrack_dedicated_servers(v).includes?(service_name) }
+      vrack_interface(service_name).try(&.[1])
     end
 
-    # Rattache un serveur dédié à un vRack. Retourne l'id de la task async
-    # (chaîne vide si l'API ne renvoie pas d'id).
+    # Rattache le serveur au vRack (modèle interface vRack 2.0). Retourne
+    # l'id de la task. Lève si le serveur n'a pas d'interface vRack.
     def attach_dedicated_server(vrack : String, service_name : String) : String
+      iface = vrack_interface(service_name)
+      raise "le serveur #{service_name} n'a pas d'interface vRack (gamme sans support vRack ?)" unless iface
       resp = client.call(
-        "POST", "/vrack/#{vrack}/dedicatedServer",
-        body: {"dedicatedServer" => service_name},
+        "POST", "/vrack/#{vrack}/dedicatedServerInterface",
+        body: {"dedicatedServerInterface" => iface[0]},
       )
       id = resp.try(&.["id"]?)
       id ? id.to_s : ""
@@ -225,10 +240,10 @@ module Beryl::Providers
         {verb: "POST", path: "/domain/zone/*/refresh"},
         {verb: "PUT", path: "/ip/*/reverse"},
         {verb: "POST", path: "/ip/*/reverse"},
-        {verb: "PUT", path: "/services/*"},               # displayName rename (avril 2026)
-        {verb: "GET", path: "/vrack"},                    # liste des vRacks
-        {verb: "GET", path: "/vrack/*"},                  # serveurs du vRack + tasks
-        {verb: "POST", path: "/vrack/*/dedicatedServer"}, # rattacher un serveur
+        {verb: "PUT", path: "/services/*"}, # displayName rename (avril 2026)
+        {verb: "GET", path: "/vrack"},      # liste des vRacks
+        {verb: "GET", path: "/vrack/*"},    # serveurs/interfaces du vRack + tasks
+        {verb: "POST", path: "/vrack/*"},   # rattacher (dedicatedServer ET dedicatedServerInterface)
       ]
     end
 
