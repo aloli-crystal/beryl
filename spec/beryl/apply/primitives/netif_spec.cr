@@ -30,4 +30,15 @@ describe Beryl::Apply::Netif do
       shell, apply_params("{iface: ix1, ip: \"\"}"), dry_run: false, context: ctx)
     result.outcome.should eq(Beryl::Apply::Outcome::Failed)
   end
+
+  it "échoue tôt si l'interface n'existe pas et liste les dispo (rien écrit)" do
+    shell = FakeShell.new
+    shell.stub(/ifconfig ix1 2>/, exit_code: 1)        # ix1 absent
+    shell.stub(/ifconfig -l/, stdout: "igb0 igb1 lo0") # interfaces réelles
+    result = prim("netif").apply(
+      shell, apply_params("{iface: ix1, ip: 192.168.42.3}"), dry_run: false, context: ctx)
+    result.outcome.should eq(Beryl::Apply::Outcome::Failed)
+    result.message.should contain("igb1")
+    shell.ran?(/sysrc ifconfig_ix1=/).should be_false # pas d'entrée parasite dans rc.conf
+  end
 end

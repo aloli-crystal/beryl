@@ -22,6 +22,16 @@ module Beryl::Apply
       return StepResult.failed("`ip` requis (IP privée du host sur le réseau)") if ip.empty?
       netmask = string(params, "netmask") || "255.255.255.0"
 
+      # L'interface doit EXISTER avant toute écriture : sinon netif
+      # laisserait un `ifconfig_<iface>` parasite dans rc.conf (warning au
+      # boot) et renverrait une erreur opaque. On échoue tôt en listant les
+      # interfaces — le nom du NIC vRack varie selon le matériel (ix, igb,
+      # bce, mlxen…), `ix1` n'est qu'un défaut.
+      unless shell.exec("ifconfig #{Process.quote(iface)} 2>/dev/null", raise_on_error: false).success?
+        available = shell.exec("ifconfig -l 2>/dev/null", raise_on_error: false).stdout.strip
+        return StepResult.failed("interface #{iface} absente — interfaces disponibles : #{available}")
+      end
+
       rc_var = "ifconfig_#{iface}"
       rc_val = "inet #{ip} netmask #{netmask}"
       has_ip = shell.exec(
