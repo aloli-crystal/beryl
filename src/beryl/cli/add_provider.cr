@@ -83,6 +83,15 @@ module Beryl::CLI::AddProvider
     account_dir = File.join(config_root, account)
     env_path = File.join(config_root, ".env.yml")
 
+    # Coffre chiffré présent → on régénère/écrit DANS le coffre
+    # `.env.toml.age` (cette société n'utilise plus `.env.yml`). Sans ça,
+    # add-provider ne voit pas l'app key (prompt) et écrirait la nouvelle
+    # clé au mauvais endroit (donc inutilisée).
+    vault_path = File.join(account_dir, Beryl::Config::EnvFile::VAULT_FILENAME)
+    if File.exists?(vault_path) && regen_credentials
+      return regen_in_vault(vault_path, account, provider, non_interactive, no_commit, dry_run)
+    end
+
     if dry_run
       env_file_stub = Beryl::Config::EnvFile.load(env_path)
       pre_existing = Beryl::CLI::AccountUtils.collect_pre_existing(
@@ -146,6 +155,48 @@ module Beryl::CLI::AddProvider
     EXIT_OK
   rescue ex : Beryl::CLI::AccountUtils::Aborted
     STDERR.puts "beryl : abandon"
+    EXIT_ABORTED
+  end
+
+  # Régénère/écrit les credentials d'un provider DANS le coffre chiffré
+  # `.env.toml.age` de la société. Lit l'app key existante du coffre (donc
+  # PAS de prompt), appelle le hook de génération du provider (OVH :
+  # nouvelle consumer key via `/auth/credential`, avec les access rules à
+  # jour — dont `/vrack`), puis réécrit le coffre chiffré.
+  private def self.regen_in_vault(
+    vault_path : String,
+    account : String,
+    provider : Beryl::Provider,
+    non_interactive : Bool,
+    no_commit : Bool,
+    dry_run : Bool,
+  ) : Int32
+    providers = Beryl::Config::EnvFile.load_vault(vault_path)
+    current = providers[provider.name]?.try(&.dup) || {} of String => String
+
+    if dry_run
+      STDERR.puts "[beryl add-provider] DRY-RUN : régénérerait les credentials #{provider.display_name} dans le coffre #{vault_path}."
+      return EXIT_OK
+    end
+
+    STDERR.puts "[beryl add-provider] coffre chiffré détecté → régénération dans #{vault_path}"
+    updated = provider.bootstrap_credentials_if_needed(
+      current,
+      force_regen: true,
+      interactive: !non_interactive,
+    )
+    providers[provider.name] = updated
+    Beryl::Config::EnvFile.write_vault(vault_path, providers)
+    STDERR.puts "[beryl add-provider] credentials #{provider.display_name} régénérés dans le coffre #{vault_path}."
+    Beryl::CLI::ConfigGit.commit(
+      [vault_path],
+      "add-provider regen : #{account}/#{provider.name}",
+      no_commit,
+    )
+    EXIT_OK
+  rescue ex
+    STDERR.puts "beryl : échec de la régénération dans le coffre — #{ex.message}"
+    STDERR.puts "  (l'app key/secret doivent déjà être dans le coffre ; sinon `beryl env edit #{account}`.)"
     EXIT_ABORTED
   end
 
