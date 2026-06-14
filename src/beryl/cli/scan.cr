@@ -683,7 +683,20 @@ module Beryl::CLI::Scan
   DEFAULT_RAID = 0
 
   private def self.pick_raid_for(pool_name : String, count : Int32, flag : String?, non_interactive : Bool) : Int32
-    _ = count
+    # Un seul disque → aucune redondance possible : le vdev est
+    # forcément simple (stripe = 0). On force 0 sans poser la question
+    # (la choisir n'aurait aucun sens). Un --raid explicite non-stripe
+    # devient alors une erreur claire plutôt qu'un échec tardif au
+    # `zpool create`.
+    if count <= 1
+      if flag && validate_raid!(flag) != DEFAULT_RAID
+        raise ArgumentError.new(
+          "#{pool_name} : un seul disque sélectionné → RAID 0 (stripe) obligatoire, " \
+          "--raid=#{flag} impossible (mirror/raidz exigent au moins 2 disques)"
+        )
+      end
+      return DEFAULT_RAID
+    end
     if flag
       return validate_raid!(flag)
     end
