@@ -275,6 +275,10 @@ module Beryl::CLI::Scan
       STDERR.puts
       STDERR.puts "Disques détectés sur #{host.fqdn} :"
       STDERR.puts disks_table(disks)
+      if (warning = disk_inventory_warning_for(host, effective_provider, disks))
+        STDERR.puts
+        STDERR.puts warning
+      end
       STDERR.puts
     end
 
@@ -499,6 +503,44 @@ module Beryl::CLI::Scan
       )
     end
     disks
+  end
+
+  # Croise l'inventaire disques DÉCLARÉ par le provider (API matériel) avec
+  # les disques réellement vus par l'OS. Retourne un message d'alerte si
+  # l'OS en voit MOINS (cas typique : disque défaillant non énuméré, qui
+  # fait stagner le firmware au boot), sinon nil. Pur → testable.
+  def self.disk_inventory_warning(inv : Beryl::DiskInventory, detected : Array(Disk)) : String?
+    det_total = detected.size
+    return nil unless det_total < inv.total
+    det_flash = detected.count(&.is_ssd)
+    det_spin = det_total - det_flash
+    String.build do |io|
+      io << "⚠ ATTENTION : le provider déclare #{inv.total} disque(s)"
+      io << " (#{inv.flash} SSD/NVMe + #{inv.spinning} HDD)" if inv.flash + inv.spinning == inv.total
+      io << ", mais l'OS n'en voit que #{det_total}"
+      io << " (#{det_flash} SSD/NVMe + #{det_spin} HDD).\n"
+      io << "   Un disque est peut-être DÉFAILLANT et non énuméré par l'OS — le firmware\n"
+      io << "   peut alors bloquer ~60 s par tentative au boot (serveur instable / retombe\n"
+      io << "   en rescue). Vérifiez `dmesg | grep -iE 'nvme|ata|pcie'` AVANT de bootstrapper."
+    end
+  end
+
+  # Variante « branchée » : récupère l'inventaire OVH pour ce host et
+  # délègue à `disk_inventory_warning`. nil si non-OVH, pas de service_name,
+  # credentials absents, ou API indisponible — JAMAIS bloquant (un souci
+  # d'API ou de droits ne doit pas casser le scan).
+  private def self.disk_inventory_warning_for(host : Beryl::Config::ResolvedHost, provider_name : String?, detected : Array(Disk)) : String?
+    return nil unless provider_name == "ovh"
+    service = host.ovh_service_name
+    return nil unless service
+    host.apply_all_credentials_to_env!
+    ovh = Beryl::Providers::Ovh.new
+    return nil unless ovh.available?
+    inv = ovh.hardware_disk_inventory(service)
+    return nil unless inv
+    disk_inventory_warning(inv, detected)
+  rescue
+    nil
   end
 
   def self.disks_table(disks : Array(Disk)) : String

@@ -245,6 +245,40 @@ describe Beryl::CLI::Scan do
     end
   end
 
+  describe ".disk_inventory_warning" do
+    # Cas in vivo ns3207652 : 2 NVMe + 2 HDD déclarés par OVH, mais un NVMe
+    # mort n'est pas énuméré → l'OS ne voit qu'1 NVMe + 2 HDD.
+    it "alerte quand l'OS voit moins de disques que l'inventaire provider" do
+      inv = Beryl::DiskInventory.new(flash: 2, spinning: 2, total: 4)
+      detected = [
+        Beryl::CLI::Scan::Disk.new(name: "nvme0n1", size_bytes: 512_000_000_000_i64, model: "Samsung", is_ssd: true, transport: "nvme"),
+        Beryl::CLI::Scan::Disk.new(name: "sda", size_bytes: 6_000_000_000_000_i64, model: "HGST", is_ssd: false, transport: "sata"),
+        Beryl::CLI::Scan::Disk.new(name: "sdb", size_bytes: 6_000_000_000_000_i64, model: "HGST", is_ssd: false, transport: "sata"),
+      ]
+      msg = Beryl::CLI::Scan.disk_inventory_warning(inv, detected)
+      msg.should_not be_nil
+      msg.not_nil!.should contain("déclare 4")
+      msg.not_nil!.should contain("n'en voit que 3")
+      msg.not_nil!.should contain("DÉFAILLANT")
+    end
+
+    it "ne dit rien quand l'OS voit tous les disques déclarés" do
+      inv = Beryl::DiskInventory.new(flash: 2, spinning: 2, total: 4)
+      detected = [
+        Beryl::CLI::Scan::Disk.new(name: "nvme0n1", size_bytes: 512_000_000_000_i64, model: "x", is_ssd: true, transport: "nvme"),
+        Beryl::CLI::Scan::Disk.new(name: "nvme1n1", size_bytes: 512_000_000_000_i64, model: "x", is_ssd: true, transport: "nvme"),
+        Beryl::CLI::Scan::Disk.new(name: "sda", size_bytes: 6_000_000_000_000_i64, model: "x", is_ssd: false, transport: "sata"),
+        Beryl::CLI::Scan::Disk.new(name: "sdb", size_bytes: 6_000_000_000_000_i64, model: "x", is_ssd: false, transport: "sata"),
+      ]
+      Beryl::CLI::Scan.disk_inventory_warning(inv, detected).should be_nil
+    end
+
+    it "ne dit rien si l'OS voit autant ou plus de disques que déclaré" do
+      inv = Beryl::DiskInventory.new(flash: 1, spinning: 0, total: 1)
+      Beryl::CLI::Scan.disk_inventory_warning(inv, [sample_disk("nvme0n1")]).should be_nil
+    end
+  end
+
   describe ".resolve_disk_selection" do
     it "accepte `all` (casse ignorée) et retourne tous les disques" do
       disks = [sample_disk("sda"), sample_disk("sdb")]

@@ -192,6 +192,13 @@ module Beryl
     end
   end
 
+  # Inventaire disques DÉCLARÉ par l'API matériel d'un provider (ex. OVH
+  # `specifications/hardware`). Sert à croiser avec les disques réellement
+  # vus par l'OS (`lsblk`) pour repérer un disque défaillant non énuméré.
+  # `flash` = SSD + NVMe, `spinning` = HDD ; `total` = somme de TOUS les
+  # disques déclarés (peut dépasser flash+spinning si un type est inconnu).
+  record DiskInventory, flash : Int32, spinning : Int32, total : Int32
+
   # Registre des providers enregistrés. Simple wrapper autour d'un
   # hash ; le module est utilisable de n'importe où via l'API `.register`
   # / `.all` / `.find`. Les providers beryl natifs sont enregistrés au

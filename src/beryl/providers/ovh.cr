@@ -89,6 +89,34 @@ module Beryl::Providers
       status == "done"
     end
 
+    # Inventaire disques déclaré par OVH (`specifications/hardware`). nil si
+    # l'API ne répond pas ou n'expose pas `diskGroups`. flash = SSD+NVMe,
+    # spinning = HDD ; total = somme de TOUS les disques déclarés. Couvert
+    # par le droit `GET /dedicated/server/*` (pas de re-régén de clé).
+    def hardware_disk_inventory(service_name : String) : Beryl::DiskInventory?
+      resp = client.call("GET", "/dedicated/server/#{service_name}/specifications/hardware")
+      groups = resp.try(&.["diskGroups"]?).try(&.as_a?)
+      return nil unless groups
+      flash = 0
+      spinning = 0
+      total = 0
+      groups.each do |g|
+        n = g["numberOfDisks"]?.try(&.as_i?) || 0
+        next if n <= 0
+        total += n
+        type = (g["diskType"]?.try(&.as_s?) || "").downcase
+        if type.includes?("ssd") || type.includes?("nvme")
+          flash += n
+        elsif type.includes?("hdd") || type.includes?("sata") || type.includes?("sas")
+          spinning += n
+        end
+      end
+      return nil if total == 0
+      Beryl::DiskInventory.new(flash: flash, spinning: spinning, total: total)
+    rescue
+      nil
+    end
+
     # --- vRack (réseau privé OVH) ---
 
     # Noms de service des vRacks du compte (ex. "pn-12345").
