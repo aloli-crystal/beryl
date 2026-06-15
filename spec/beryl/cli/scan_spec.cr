@@ -91,6 +91,51 @@ describe Beryl::CLI::Scan do
     end
   end
 
+  describe ".merge_scan_into" do
+    it "rafraîchit les champs scan et préserve les ajouts de l'opérateur" do
+      existing = <<-YAML
+        provider: ovh
+        ovh:
+          service_name: ns-old.eu
+        proxy_jump: admin@zsbg.quimeo.net
+        apply_recipes:
+          - sshd-vrack-only: {}
+        freebsd:
+          hostname: bi
+          users: [admin, deploy]
+          zfs:
+            zroot:
+              boot: true
+              raid: 0
+              disks: [/dev/nvme0n1]
+        YAML
+      scan_yaml = <<-YAML
+        provider: ovh
+        ovh:
+          service_name: ns-new.eu
+        freebsd:
+          hostname: bi
+          zfs:
+            zroot:
+              boot: true
+              raid: 1
+              disks:
+                - /dev/nvme0n1
+                - /dev/nvme1n1
+        YAML
+      merged = Beryl::CLI::Scan.merge_scan_into(existing, scan_yaml)
+      parsed = YAML.parse(merged)
+      # préservés
+      parsed["apply_recipes"].as_a.size.should eq(1)
+      parsed["proxy_jump"].as_s.should eq("admin@zsbg.quimeo.net")
+      parsed["freebsd"]["users"].as_a.size.should eq(2)
+      # rafraîchis par scan
+      parsed["ovh"]["service_name"].as_s.should eq("ns-new.eu")
+      parsed["freebsd"]["zfs"]["zroot"]["raid"].as_i.should eq(1)
+      parsed["freebsd"]["zfs"]["zroot"]["disks"].as_a.size.should eq(2)
+    end
+  end
+
   describe ".parse_pool_spec" do
     it "parse `data:sda,sdb:10` → pool zdata, mountpoint /data, non-boot" do
       candidates = [sample_disk("sda"), sample_disk("sdb"), sample_disk("sdc")]

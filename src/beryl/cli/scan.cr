@@ -366,14 +366,33 @@ module Beryl::CLI::Scan
 
     if target
       if File.exists?(target)
-        if non_interactive
-          STDERR.puts "beryl : #{target} existe (refus en --non-interactive)"
-          return EXIT_USAGE
+        # Fusion plutôt qu'écrasement : scan ne possède QUE
+        # provider/service_name/hostname/disques/raid ; on préserve le
+        # reste (apply_recipes, proxy_jump, ssh_host, freebsd.users…).
+        merged = begin
+          merge_scan_into(File.read(target), yaml)
+        rescue
+          nil # YAML existant illisible → on retombe sur l'écrasement explicite
         end
-        ans = ask("#{target} existe déjà. Écraser ? [o/N] : ", default: "N")
-        unless ans.downcase.starts_with?("o") || ans.downcase.starts_with?("y")
-          STDERR.puts "beryl : abandon, fichier conservé"
-          return EXIT_ABORTED
+        if merged.nil?
+          if non_interactive
+            STDERR.puts "beryl : #{target} existe et n'est pas un YAML lisible (refus en --non-interactive)"
+            return EXIT_USAGE
+          end
+          ans = ask("#{target} existe (illisible en YAML). Écraser ENTIÈREMENT ? [o/N] : ", default: "N")
+          unless ans.downcase.starts_with?("o") || ans.downcase.starts_with?("y")
+            STDERR.puts "beryl : abandon, fichier conservé"
+            return EXIT_ABORTED
+          end
+        else
+          unless non_interactive
+            ans = ask("#{target} existe — mettre à jour (fusion ; vos apply_recipes/proxy_jump sont préservés) ? [O/n] : ", default: "O")
+            if ans.downcase.starts_with?("n")
+              STDERR.puts "beryl : abandon, fichier conservé"
+              return EXIT_ABORTED
+            end
+          end
+          yaml = merged
         end
       end
       Dir.mkdir_p(File.dirname(target))
@@ -861,6 +880,58 @@ module Beryl::CLI::Scan
         pool.disks.each { |d| io << "        - " << d.dev_path << "  # " << d.human_size << " " << d.kind << " " << d.model << '\n' }
       end
     end
+  end
+
+  # Blocs provider connus : retirés de l'existant si le provider a changé
+  # (sinon un ancien bloc `scaleway:` resterait après bascule vers ovh).
+  KNOWN_PROVIDER_BLOCKS = %w[ovh scaleway dedibox hetzner latitude cherry phoenixnap vultr leaseweb]
+
+  # Fusionne le YAML généré par scan dans un host.yml EXISTANT, en
+  # PRÉSERVANT toutes les clés que scan ne gère pas (apply_recipes,
+  # proxy_jump, ssh_host, user, port, freebsd.users…). scan possède :
+  # `provider`, le bloc du provider, et `freebsd.{hostname,zfs}`.
+  #
+  # Les COMMENTAIRES de l'ancien fichier sont perdus (round-trip YAML) —
+  # seules les DONNÉES sont préservées. Lève si l'existant n'est pas un
+  # mapping YAML (le caller retombe alors sur l'écrasement explicite).
+  def self.merge_scan_into(existing : String, scan_yaml : String) : String
+    old = YAML.parse(existing).as_h
+    scan = YAML.parse(scan_yaml).as_h
+    fb_key = YAML::Any.new("freebsd")
+    effective = scan[YAML::Any.new("provider")]?.try(&.as_s?)
+
+    result = {} of YAML::Any => YAML::Any
+    old.each do |k, v|
+      ks = k.as_s?
+      if ks == "freebsd"
+        result[k] = merge_freebsd(v, scan[fb_key]?)
+      elsif ks && scan.has_key?(k)
+        result[k] = scan[k] # provider + bloc provider → rafraîchis par scan
+      elsif ks && KNOWN_PROVIDER_BLOCKS.includes?(ks) && ks != effective
+        next # bloc d'un ancien provider → retiré (provider changé)
+      else
+        result[k] = v # apply_recipes, proxy_jump, ssh_host, user… → préservés
+      end
+    end
+    # Clés que scan apporte et qui manquaient (provider/bloc/freebsd neufs).
+    scan.each { |k, v| result[k] = v unless result.has_key?(k) }
+
+    String.build do |io|
+      io << "# Mis à jour par `beryl scan` le " << Beryl.format_timestamp(Time.local) << '\n'
+      io << "# Champs scan (provider/service_name/hostname/disques/raid) rafraîchis ;\n"
+      io << "# vos autres clés (apply_recipes, proxy_jump…) sont préservées.\n"
+      io << result.to_yaml.sub(/\A---\n/, "")
+    end
+  end
+
+  # Fusionne le bloc `freebsd:` : garde les sous-clés de l'opérateur
+  # (users, packages…) et remplace celles que scan gère (hostname, zfs).
+  private def self.merge_freebsd(old_fb : YAML::Any, scan_fb : YAML::Any?) : YAML::Any
+    return old_fb unless scan_fb
+    merged = {} of YAML::Any => YAML::Any
+    (old_fb.as_h? || {} of YAML::Any => YAML::Any).each { |k, v| merged[k] = v }
+    (scan_fb.as_h? || {} of YAML::Any => YAML::Any).each { |k, v| merged[k] = v }
+    YAML::Any.new(merged)
   end
 
   def self.default_hostname(fqdn : String) : String
