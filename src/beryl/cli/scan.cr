@@ -10,6 +10,7 @@ require "./dns_setup"
 require "./dns_apply"
 require "./provider_shortcut"
 require "./config_git"
+require "./raid_controller"
 
 # Sous-commande `beryl scan <host>` : se connecte au rescue Linux,
 # détecte les disques, propose un YAML pour le fichier host.
@@ -291,6 +292,11 @@ module Beryl::CLI::Scan
         STDERR.puts warning
       end
       STDERR.puts
+
+      # RAID matériel : proposer (option 2/3) de reconstruire la carte. Si
+      # l'opérateur reconstruit, les disques changent → reboot rescue + re-scan
+      # requis, on s'arrête ici proprement.
+      return EXIT_OK if maybe_reconfigure_raid(conn, host, disks, non_interactive)
     end
 
     # `dns_short` est le nom court retenu par l'étape DNS (flag ou prompt) ;
@@ -586,6 +592,62 @@ module Beryl::CLI::Scan
     disk_inventory_warning(inv, detected)
   rescue
     nil
+  end
+
+  # Propose la reconstruction RAID quand un contrôleur matériel est détecté.
+  # Retourne `true` si une reconfiguration a EU LIEU (→ le caller s'arrête :
+  # disques modifiés, reboot rescue + re-scan requis), `false` si on continue
+  # le scan normalement (option « volume tel quel », non-interactif, ou pas de
+  # `storcli_url`).
+  private def self.maybe_reconfigure_raid(conn : SSH::Connection, host : Beryl::Config::ResolvedHost, disks : Array(Disk), non_interactive : Bool) : Bool
+    return false unless disks.any?(&.hardware_raid?)
+    return false if non_interactive
+
+    url = host.storcli_url
+    unless url
+      STDERR.puts "  (reconstruction RAID indisponible : `storcli_url` non configuré — voir _default.yml)"
+      return false
+    end
+
+    STDERR.puts
+    STDERR.puts "Contrôleur RAID matériel détecté. Que faire ?"
+    STDERR.puts "  1) Utiliser le volume tel quel (la carte gère la redondance)"
+    STDERR.puts "  2) Reconstruire en JBOD → ZFS gère le RAID (DÉTRUIT le volume matériel)"
+    STDERR.puts "  3) Recréer un volume matériel à un niveau choisi (DÉTRUIT le volume actuel)"
+    case ask("Choix [1/2/3] (défaut 1) : ", default: "1").strip
+    when "2"
+      reconfigure_raid(conn, url) { |cid| RaidController.to_jbod!(conn, cid) }
+      explain_raid_reboot("JBOD (disques bruts pour ZFS)")
+      true
+    when "3"
+      level = ask_until_valid("Niveau RAID matériel (0|1|5|6|10) : ", default: "10") do |a|
+        n = validate_raid!(a)
+        raise ArgumentError.new("le contrôleur ne gère pas RAID #{n} (matériel : 0, 1, 5, 6, 10)") unless [0, 1, 5, 6, 10].includes?(n)
+        n
+      end
+      reconfigure_raid(conn, url) { |cid| RaidController.recreate!(conn, cid, level) }
+      explain_raid_reboot("nouveau volume RAID#{level}")
+      true
+    else
+      false # option 1 : on garde le volume tel quel, le scan continue
+    end
+  end
+
+  # Récupère storcli, résout le contrôleur, exécute le bloc destructif.
+  private def self.reconfigure_raid(conn : SSH::Connection, url : String, &)
+    STDERR.puts "  → récupération de storcli dans le rescue…"
+    raise "téléchargement/exécution de storcli a échoué (storcli_url correct ? rescue avec curl ?)" unless Beryl::CLI::RaidController.fetch(conn, url)
+    cid = Beryl::CLI::RaidController.controller_id(conn)
+    raise "aucun contrôleur RAID vu par storcli" unless cid
+    STDERR.puts "  → reconfiguration du contrôleur /c#{cid} (destructif)…"
+    yield cid
+  end
+
+  private def self.explain_raid_reboot(what : String) : Nil
+    STDERR.puts
+    STDERR.puts "✅ Contrôleur reconfiguré : #{what}."
+    STDERR.puts "   REBOOTEZ le rescue (manager OVH → rescue → redémarrer) pour que les"
+    STDERR.puts "   disques se ré-énumèrent, PUIS relancez `beryl scan <host> --write`."
   end
 
   def self.disks_table(disks : Array(Disk)) : String

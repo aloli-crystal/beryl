@@ -509,6 +509,15 @@ module Beryl::Config
       @merged[YAML::Any.new("proxy_jump")]?.try(&.as_s?)
     end
 
+    # URL d'un binaire `storcli64` (Linux) à récupérer dans le rescue pour
+    # piloter un contrôleur RAID matériel (MegaRAID…). Le rescue OVH ne
+    # fournit aucun outil contrôleur → beryl le `curl` depuis ici. Hébergé
+    # par nos soins (ex. release `aloli/infra-bin`). nil = pas de
+    # reconstruction RAID possible (seule l'option « volume tel quel »).
+    def storcli_url : String?
+      @merged[YAML::Any.new("storcli_url")]?.try(&.as_s?)
+    end
+
     # Chemin de la clé privée SSH à utiliser pour ce host.
     #
     # Ordre de résolution :
