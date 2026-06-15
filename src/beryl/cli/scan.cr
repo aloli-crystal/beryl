@@ -673,10 +673,10 @@ module Beryl::CLI::Scan
     # réussit sur la session encore vivante → fausse détection.
     sleep 30.seconds
     log "attente du retour du rescue + ré-énumération des disques (~2-6 min)…"
-    start = Time.monotonic
+    start = Time.instant
     last_log = start
     loop do
-      elapsed = (Time.monotonic - start).total_seconds.to_i
+      elapsed = (Time.instant - start).total_seconds.to_i
       raise "le rescue n'est pas revenu en SSH après #{elapsed}s — rebootez-le et relancez `beryl scan`." if elapsed > 600
 
       if conn.exec("lsblk -dn 2>/dev/null", raise_on_error: false).success?
@@ -686,9 +686,9 @@ module Beryl::CLI::Scan
         return disks
       end
 
-      if (Time.monotonic - last_log).total_seconds >= 35
+      if (Time.instant - last_log).total_seconds >= 35
         log "toujours en attente du rescue… (#{elapsed}s écoulées)"
-        last_log = Time.monotonic
+        last_log = Time.instant
       end
       sleep 10.seconds
     end
