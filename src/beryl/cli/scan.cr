@@ -610,20 +610,24 @@ module Beryl::CLI::Scan
   #   - nil si l'opérateur reconstruit mais refuse le reboot auto → le caller
   #     s'arrête (reboot manuel + relance requis).
   private def self.maybe_reconfigure_raid(conn : SSH::Connection, host : Beryl::Config::ResolvedHost, disks : Array(Disk), non_interactive : Bool) : Array(Disk)?
-    return disks unless disks.any?(&.hardware_raid?)
     return disks if non_interactive
+    # Proposer la (re)config dès qu'un contrôleur RAID est PRÉSENT — même si
+    # l'OS voit déjà des disques bruts (carte en JBOD) : on peut vouloir
+    # RECRÉER un volume matériel. Détection : volume HW visible (rapide) OU
+    # contrôleur sur le bus PCI (`lspci`, couvre le cas JBOD).
+    return disks unless disks.any?(&.hardware_raid?) || Beryl::CLI::RaidController.present?(conn)
 
     url = host.storcli_url
     unless url
-      STDERR.puts "  (reconstruction RAID indisponible : `storcli_url` non configuré — voir _default.yml)"
+      STDERR.puts "  (reconfiguration RAID indisponible : `storcli_url` non configuré — voir _default.yml)"
       return disks
     end
 
     STDERR.puts
-    STDERR.puts "Contrôleur RAID matériel détecté. Que faire ?"
-    STDERR.puts "  1) Utiliser le volume tel quel (la carte gère la redondance)"
-    STDERR.puts "  2) Reconstruire en JBOD → ZFS gère le RAID (DÉTRUIT le volume matériel)"
-    STDERR.puts "  3) Recréer un volume matériel à un niveau choisi (DÉTRUIT le volume actuel)"
+    STDERR.puts "Contrôleur RAID matériel présent. Que faire des disques ?"
+    STDERR.puts "  1) Utiliser tels quels (ce que l'OS voit ci-dessus)"
+    STDERR.puts "  2) (Re)configurer en JBOD → ZFS gère le RAID"
+    STDERR.puts "  3) (Re)créer un volume RAID matériel à un niveau choisi"
     case ask("Choix [1/2/3] (défaut 1) : ", default: "1").strip
     when "2"
       reconfigure_raid(conn, url) { |cid| RaidController.to_jbod!(conn, cid) }

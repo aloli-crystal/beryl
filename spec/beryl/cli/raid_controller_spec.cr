@@ -39,6 +39,17 @@ describe Beryl::CLI::RaidController do
     end
   end
 
+  describe ".parse_lspci_has_raid" do
+    it "détecte un contrôleur RAID (même en JBOD : reste 'RAID bus controller')" do
+      pci = "00:1f.2 SATA controller: Intel ...\n01:00.0 RAID bus controller: Broadcom / LSI MegaRAID SAS-3 3108 [Invader] (rev 02)\n"
+      Beryl::CLI::RaidController.parse_lspci_has_raid(pci).should be_true
+    end
+    it "ne détecte rien sur un serveur sans carte RAID (AHCI seul)" do
+      pci = "00:1f.2 SATA controller: Intel Corporation Cannon Lake AHCI\n02:00.0 Ethernet controller: Intel X710\n"
+      Beryl::CLI::RaidController.parse_lspci_has_raid(pci).should be_false
+    end
+  end
+
   describe ".create_vd_command" do
     it "construit la commande add vd avec les slots" do
       Beryl::CLI::RaidController.create_vd_command(0, 10, ["252:0", "252:1", "252:2", "252:3"])

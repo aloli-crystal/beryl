@@ -58,6 +58,18 @@ module Beryl::CLI
       "/c#{cid} add vd type=#{raid_type(raid_num)} drives=#{slots.join(",")}"
     end
 
+    # Vrai si un contrôleur RAID matériel est présent sur le bus PCI — MÊME
+    # en JBOD (la carte reste un « RAID bus controller » côté lspci). Permet
+    # de proposer la (re)configuration même quand l'OS voit déjà des disques
+    # bruts (ex. carte déjà basculée en JBOD → on peut vouloir recréer un VD).
+    def self.parse_lspci_has_raid(output : String) : Bool
+      output.lines.any? { |l| l =~ /raid bus controller/i || l =~ /megaraid/i }
+    end
+
+    def self.present?(conn : SSH::Connection) : Bool
+      parse_lspci_has_raid(conn.exec("lspci 2>/dev/null", raise_on_error: false).stdout)
+    end
+
     # ── Orchestration (rescue) ──────────────────────────────────────────
 
     # Télécharge storcli dans le rescue et vérifie qu'il s'exécute.
