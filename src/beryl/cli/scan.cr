@@ -293,10 +293,14 @@ module Beryl::CLI::Scan
       end
       STDERR.puts
 
-      # RAID matériel : proposer (option 2/3) de reconstruire la carte. Si
-      # l'opérateur reconstruit, les disques changent → reboot rescue + re-scan
-      # requis, on s'arrête ici proprement.
-      return EXIT_OK if maybe_reconfigure_raid(conn, host, disks, non_interactive)
+      # RAID matériel : proposer (option 2/3) de reconstruire la carte.
+      # Si l'opérateur reconstruit + accepte le reboot auto, beryl reboote
+      # le rescue, attend son retour et re-scanne → `disks` reflète le
+      # nouveau layout (JBOD ou nouveau volume). Refus du reboot auto → nil
+      # → on s'arrête (reboot manuel requis).
+      reconfigured = maybe_reconfigure_raid(conn, host, disks, non_interactive)
+      return EXIT_OK unless reconfigured
+      disks = reconfigured
     end
 
     # `dns_short` est le nom court retenu par l'étape DNS (flag ou prompt) ;
@@ -599,14 +603,20 @@ module Beryl::CLI::Scan
   # disques modifiés, reboot rescue + re-scan requis), `false` si on continue
   # le scan normalement (option « volume tel quel », non-interactif, ou pas de
   # `storcli_url`).
-  private def self.maybe_reconfigure_raid(conn : SSH::Connection, host : Beryl::Config::ResolvedHost, disks : Array(Disk), non_interactive : Bool) : Bool
-    return false unless disks.any?(&.hardware_raid?)
-    return false if non_interactive
+  # Retourne les disques À UTILISER pour la suite du scan :
+  #   - les disques d'origine si pas de RAID matériel, non-interactif, pas de
+  #     `storcli_url`, ou option 1 (volume tel quel) ;
+  #   - les disques RE-SCANNÉS après reconfig + reboot auto (option 2/3) ;
+  #   - nil si l'opérateur reconstruit mais refuse le reboot auto → le caller
+  #     s'arrête (reboot manuel + relance requis).
+  private def self.maybe_reconfigure_raid(conn : SSH::Connection, host : Beryl::Config::ResolvedHost, disks : Array(Disk), non_interactive : Bool) : Array(Disk)?
+    return disks unless disks.any?(&.hardware_raid?)
+    return disks if non_interactive
 
     url = host.storcli_url
     unless url
       STDERR.puts "  (reconstruction RAID indisponible : `storcli_url` non configuré — voir _default.yml)"
-      return false
+      return disks
     end
 
     STDERR.puts
@@ -617,8 +627,7 @@ module Beryl::CLI::Scan
     case ask("Choix [1/2/3] (défaut 1) : ", default: "1").strip
     when "2"
       reconfigure_raid(conn, url) { |cid| RaidController.to_jbod!(conn, cid) }
-      explain_raid_reboot("JBOD (disques bruts pour ZFS)")
-      true
+      after_raid_reconfig(conn, "JBOD (disques bruts pour ZFS)")
     when "3"
       level = ask_until_valid("Niveau RAID matériel (0|1|5|6|10) : ", default: "10") do |a|
         n = validate_raid!(a)
@@ -626,10 +635,9 @@ module Beryl::CLI::Scan
         n
       end
       reconfigure_raid(conn, url) { |cid| RaidController.recreate!(conn, cid, level) }
-      explain_raid_reboot("nouveau volume RAID#{level}")
-      true
+      after_raid_reconfig(conn, "nouveau volume RAID#{level}")
     else
-      false # option 1 : on garde le volume tel quel, le scan continue
+      disks # option 1 : volume tel quel, le scan continue avec ces disques
     end
   end
 
@@ -643,11 +651,35 @@ module Beryl::CLI::Scan
     yield cid
   end
 
-  private def self.explain_raid_reboot(what : String) : Nil
+  # Après reconfig : propose le reboot AUTO du rescue (le netboot OVH reste
+  # en rescue). Si accepté → reboot + attente + re-scan, retourne les
+  # nouveaux disques. Si refusé → instructions manuelles + nil (stop).
+  private def self.after_raid_reconfig(conn : SSH::Connection, what : String) : Array(Disk)?
     STDERR.puts
     STDERR.puts "✅ Contrôleur reconfiguré : #{what}."
-    STDERR.puts "   REBOOTEZ le rescue (manager OVH → rescue → redémarrer) pour que les"
-    STDERR.puts "   disques se ré-énumèrent, PUIS relancez `beryl scan <host> --write`."
+    if ask("Rebooter le rescue et reprendre le scan automatiquement ? [O/n] : ", default: "O").downcase.starts_with?("n")
+      STDERR.puts "   → rebootez le rescue (manager OVH → rescue → redémarrer), puis relancez `beryl scan <host> --write`."
+      return nil
+    end
+    reboot_rescue_and_rescan(conn)
+  end
+
+  # Reboote le rescue et attend son retour (le netboot OVH reste en rescue),
+  # puis re-lit les disques (ré-énumérés). Lève si le rescue ne revient pas.
+  private def self.reboot_rescue_and_rescan(conn : SSH::Connection) : Array(Disk)
+    STDERR.puts "  → reboot du rescue (le netboot OVH reste en rescue)…"
+    conn.exec("( sleep 2 ; reboot ) >/dev/null 2>&1 &", raise_on_error: false)
+    sleep 20.seconds
+    STDERR.puts "  → attente du retour du rescue + ré-énumération des disques (~2-6 min)…"
+    40.times do
+      sleep 10.seconds
+      next unless conn.exec("lsblk -dn 2>/dev/null", raise_on_error: false).success?
+      disks = read_disks(conn)
+      STDERR.puts "  ✅ rescue revenu — #{disks.size} disque(s) détecté(s) après reconfig."
+      STDERR.puts disks_table(disks)
+      return disks
+    end
+    raise "le rescue n'est pas revenu en SSH après le reboot — rebootez-le et relancez `beryl scan`."
   end
 
   def self.disks_table(disks : Array(Disk)) : String
