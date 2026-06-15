@@ -74,9 +74,13 @@ describe Beryl::CLI::RaidController do
   end
 
   describe ".create_vd_command" do
-    it "construit la commande add vd avec les slots" do
+    it "RAID 10 : ajoute pdperarray=2 (spans miroirs obligatoires)" do
       Beryl::CLI::RaidController.create_vd_command(0, 10, ["252:0", "252:1", "252:2", "252:3"])
-        .should eq("/c0 add vd type=raid10 drives=252:0,252:1,252:2,252:3")
+        .should eq("/c0 add vd type=raid10 drives=252:0,252:1,252:2,252:3 pdperarray=2")
+    end
+    it "RAID 5 : pas de pdperarray (un seul span)" do
+      Beryl::CLI::RaidController.create_vd_command(0, 5, ["252:0", "252:1", "252:2"])
+        .should eq("/c0 add vd type=raid5 drives=252:0,252:1,252:2")
     end
   end
 end

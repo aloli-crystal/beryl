@@ -55,7 +55,12 @@ module Beryl::CLI
     end
 
     def self.create_vd_command(cid : Int32, raid_num : Int32, slots : Array(String)) : String
-      "/c#{cid} add vd type=#{raid_type(raid_num)} drives=#{slots.join(",")}"
+      cmd = "/c#{cid} add vd type=#{raid_type(raid_num)} drives=#{slots.join(",")}"
+      # RAID 10 = miroirs (spans) stripés → storcli exige `pdperarray` (sinon
+      # « Cannot create configuration with 1 span »). Chaque span = 1 miroir
+      # de 2 disques → pdperarray=2 (4 disques → 2 spans, 6 → 3, etc.).
+      cmd += " pdperarray=2" if raid_num == 10
+      cmd
     end
 
     # Vérifie que le niveau RAID matériel est compatible avec le nombre de
