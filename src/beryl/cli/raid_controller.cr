@@ -58,6 +58,26 @@ module Beryl::CLI
       "/c#{cid} add vd type=#{raid_type(raid_num)} drives=#{slots.join(",")}"
     end
 
+    # Vérifie que le niveau RAID matériel est compatible avec le nombre de
+    # disques. Lève `ArgumentError` (message exploitable) sinon — ainsi le
+    # prompt re-demande AVANT toute opération destructive.
+    def self.validate_drive_count!(raid_num : Int32, n : Int32) : Nil
+      case raid_num
+      when 0
+        raise ArgumentError.new("RAID 0 exige au moins 1 disque") if n < 1
+      when 1
+        raise ArgumentError.new("RAID 1 = exactement 2 disques (#{n} sélectionnés) — pour #{n} disques en miroir, choisissez RAID 10") if n != 2
+      when 5
+        raise ArgumentError.new("RAID 5 exige au moins 3 disques (#{n} sélectionnés)") if n < 3
+      when 6
+        raise ArgumentError.new("RAID 6 exige au moins 4 disques (#{n} sélectionnés)") if n < 4
+      when 10
+        raise ArgumentError.new("RAID 10 exige au moins 4 disques en nombre PAIR (#{n} sélectionnés)") if n < 4 || n.odd?
+      else
+        raise ArgumentError.new("niveau RAID matériel non supporté : #{raid_num}")
+      end
+    end
+
     # Vrai si un contrôleur RAID matériel est présent sur le bus PCI — MÊME
     # en JBOD (la carte reste un « RAID bus controller » côté lspci). Permet
     # de proposer la (re)configuration même quand l'OS voit déjà des disques
@@ -100,7 +120,11 @@ module Beryl::CLI
     def self.recreate!(conn : SSH::Connection, cid : Int32, raid_num : Int32) : Nil
       slots = parse_drive_slots(conn.exec("#{STORCLI} /c#{cid}/eall/sall show", raise_on_error: false).stdout)
       raise "aucun disque physique listé par storcli (/c#{cid}/eall/sall show)" if slots.empty?
+      validate_drive_count!(raid_num, slots.size)
       conn.exec("#{STORCLI} /c#{cid}/vall delete force", raise_on_error: false)
+      # Disques en JBOD / config étrangère → « Unconfigured Good » obligatoire
+      # avant `add vd`, sinon storcli répond « resources already in use ».
+      conn.exec("#{STORCLI} /c#{cid}/eall/sall set good force", raise_on_error: false)
       run!(conn, create_vd_command(cid, raid_num, slots))
     end
 

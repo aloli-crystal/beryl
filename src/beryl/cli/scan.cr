@@ -633,9 +633,10 @@ module Beryl::CLI::Scan
       reconfigure_raid(conn, url) { |cid| RaidController.to_jbod!(conn, cid) }
       after_raid_reconfig(conn, "JBOD (disques bruts pour ZFS)")
     when "3"
-      level = ask_until_valid("Niveau RAID matériel (0|1|5|6|10) : ", default: "10") do |a|
+      level = ask_until_valid("Niveau RAID matériel (0|1|5|6|10) pour #{disks.size} disque(s) : ", default: "10") do |a|
         n = validate_raid!(a)
         raise ArgumentError.new("le contrôleur ne gère pas RAID #{n} (matériel : 0, 1, 5, 6, 10)") unless [0, 1, 5, 6, 10].includes?(n)
+        Beryl::CLI::RaidController.validate_drive_count!(n, disks.size)
         n
       end
       reconfigure_raid(conn, url) { |cid| RaidController.recreate!(conn, cid, level) }

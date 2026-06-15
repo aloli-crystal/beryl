@@ -50,6 +50,29 @@ describe Beryl::CLI::RaidController do
     end
   end
 
+  describe ".validate_drive_count!" do
+    it "refuse RAID 1 sur 4 disques et oriente vers RAID 10" do
+      expect_raises(ArgumentError, /RAID 10/) do
+        Beryl::CLI::RaidController.validate_drive_count!(1, 4)
+      end
+    end
+    it "accepte RAID 1 sur 2, RAID 10 sur 4, RAID 5 sur 3" do
+      Beryl::CLI::RaidController.validate_drive_count!(1, 2)
+      Beryl::CLI::RaidController.validate_drive_count!(10, 4)
+      Beryl::CLI::RaidController.validate_drive_count!(5, 3)
+    end
+    it "refuse RAID 10 sur un nombre impair" do
+      expect_raises(ArgumentError, /PAIR/) do
+        Beryl::CLI::RaidController.validate_drive_count!(10, 3)
+      end
+    end
+    it "refuse RAID 5 sur 2 disques (trop peu)" do
+      expect_raises(ArgumentError, /au moins 3/) do
+        Beryl::CLI::RaidController.validate_drive_count!(5, 2)
+      end
+    end
+  end
+
   describe ".create_vd_command" do
     it "construit la commande add vd avec les slots" do
       Beryl::CLI::RaidController.create_vd_command(0, 10, ["252:0", "252:1", "252:2", "252:3"])
