@@ -667,19 +667,31 @@ module Beryl::CLI::Scan
   # Reboote le rescue et attend son retour (le netboot OVH reste en rescue),
   # puis re-lit les disques (ré-énumérés). Lève si le rescue ne revient pas.
   private def self.reboot_rescue_and_rescan(conn : SSH::Connection) : Array(Disk)
-    STDERR.puts "  → reboot du rescue (le netboot OVH reste en rescue)…"
+    log "reboot du rescue (le netboot OVH reste en rescue)…"
     conn.exec("( sleep 2 ; reboot ) >/dev/null 2>&1 &", raise_on_error: false)
-    sleep 20.seconds
-    STDERR.puts "  → attente du retour du rescue + ré-énumération des disques (~2-6 min)…"
-    40.times do
+    # Laisser l'ancien rescue tomber avant de poller, sinon le 1er lsblk
+    # réussit sur la session encore vivante → fausse détection.
+    sleep 30.seconds
+    log "attente du retour du rescue + ré-énumération des disques (~2-6 min)…"
+    start = Time.monotonic
+    last_log = start
+    loop do
+      elapsed = (Time.monotonic - start).total_seconds.to_i
+      raise "le rescue n'est pas revenu en SSH après #{elapsed}s — rebootez-le et relancez `beryl scan`." if elapsed > 600
+
+      if conn.exec("lsblk -dn 2>/dev/null", raise_on_error: false).success?
+        disks = read_disks(conn)
+        log "rescue revenu après #{elapsed}s — #{disks.size} disque(s) ré-énumérés :"
+        STDERR.puts disks_table(disks)
+        return disks
+      end
+
+      if (Time.monotonic - last_log).total_seconds >= 35
+        log "toujours en attente du rescue… (#{elapsed}s écoulées)"
+        last_log = Time.monotonic
+      end
       sleep 10.seconds
-      next unless conn.exec("lsblk -dn 2>/dev/null", raise_on_error: false).success?
-      disks = read_disks(conn)
-      STDERR.puts "  ✅ rescue revenu — #{disks.size} disque(s) détecté(s) après reconfig."
-      STDERR.puts disks_table(disks)
-      return disks
     end
-    raise "le rescue n'est pas revenu en SSH après le reboot — rebootez-le et relancez `beryl scan`."
   end
 
   def self.disks_table(disks : Array(Disk)) : String
