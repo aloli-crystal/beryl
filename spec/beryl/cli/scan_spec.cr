@@ -322,6 +322,27 @@ describe Beryl::CLI::Scan do
       inv = Beryl::DiskInventory.new(flash: 1, spinning: 0, total: 1)
       Beryl::CLI::Scan.disk_inventory_warning(inv, [sample_disk("nvme0n1")]).should be_nil
     end
+
+    # INFRA-3 : 4x960 SSD derrière un MegaRAID → 1 volume logique sda.
+    it "explique (sans alarmer) quand un contrôleur RAID matériel masque les disques" do
+      inv = Beryl::DiskInventory.new(flash: 4, spinning: 0, total: 4)
+      detected = [
+        Beryl::CLI::Scan::Disk.new(name: "sda", size_bytes: 1_920_000_000_000_i64, model: "AVAGO MR9363-4i", is_ssd: false, transport: ""),
+      ]
+      msg = Beryl::CLI::Scan.disk_inventory_warning(inv, detected)
+      msg.should_not be_nil
+      msg.not_nil!.should contain("RAID matériel")
+      msg.not_nil!.should_not contain("DÉFAILLANT")
+    end
+  end
+
+  describe "Disk#hardware_raid?" do
+    it "reconnaît un volume de contrôleur RAID matériel (MegaRAID)" do
+      Beryl::CLI::Scan::Disk.new(name: "sda", size_bytes: 1_920_000_000_000_i64, model: "AVAGO MR9363-4i", is_ssd: false, transport: "").hardware_raid?.should be_true
+    end
+    it "ne confond pas un SSD/NVMe normal" do
+      Beryl::CLI::Scan::Disk.new(name: "nvme0n1", size_bytes: 512_000_000_000_i64, model: "Samsung MZVL2512HCJQ", is_ssd: true, transport: "nvme").hardware_raid?.should be_false
+    end
   end
 
   describe ".resolve_disk_selection" do

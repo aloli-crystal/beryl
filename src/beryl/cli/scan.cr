@@ -59,6 +59,17 @@ module Beryl::CLI::Scan
     def kind : String
       @is_ssd ? "SSD/NVMe" : "HDD"
     end
+
+    # Vrai si ce « disque » est en réalité un volume logique présenté par un
+    # contrôleur RAID MATÉRIEL (MegaRAID/PERC/Smart Array…), qui masque les
+    # disques physiques. L'OS voit alors MOINS de disques que l'inventaire
+    # provider — c'est normal (redondance gérée par la carte), pas une panne.
+    def hardware_raid? : Bool
+      m = @model.downcase
+      return true if m =~ /\bmr\d/ # MegaRAID MR9361/MR9363…
+      %w[avago lsi broadcom megaraid perc smart array smartarray
+        adaptec microsemi smartraid logical volume virtual disk].any? { |s| m.includes?(s) }
+    end
   end
 
   class Aborted < Exception
@@ -533,6 +544,21 @@ module Beryl::CLI::Scan
     return nil unless det_total < inv.total
     det_flash = detected.count(&.is_ssd)
     det_spin = det_total - det_flash
+
+    # RAID MATÉRIEL : un contrôleur (MegaRAID/PERC/Smart Array…) agrège les
+    # disques physiques en volumes logiques → l'OS en voit moins, c'est
+    # ATTENDU. On rassure au lieu d'alarmer, et beryl utilise le(s) volume(s)
+    # présenté(s) (la redondance est gérée par la carte).
+    if ctrl = detected.find(&.hardware_raid?)
+      return String.build do |io|
+        io << "ℹ RAID matériel détecté (#{ctrl.model}) : le provider déclare "
+        io << "#{inv.total} disque(s) physique(s), agrégés par le contrôleur en "
+        io << "#{det_total} volume(s) logique(s).\n"
+        io << "   C'est NORMAL — beryl utilisera le(s) volume(s) présenté(s) "
+        io << "(redondance assurée par la carte RAID). Choisissez `#{ctrl.name}` pour zroot."
+      end
+    end
+
     String.build do |io|
       io << "⚠ ATTENTION : le provider déclare #{inv.total} disque(s)"
       io << " (#{inv.flash} SSD/NVMe + #{inv.spinning} HDD)" if inv.flash + inv.spinning == inv.total
