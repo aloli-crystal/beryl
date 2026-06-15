@@ -111,29 +111,35 @@ module Beryl::CLI
     # Bascule le contrôleur en JBOD (les disques physiques deviennent des
     # disques bruts pour ZFS) : détruit les volumes puis active le JBOD.
     def self.to_jbod!(conn : SSH::Connection, cid : Int32) : Nil
-      # Suppression tolérante (pas de volume = rien à faire).
-      conn.exec("#{STORCLI} /c#{cid}/vall delete force", raise_on_error: false)
-      run!(conn, "/c#{cid} set jbod=on")
+      storcli(conn, "/c#{cid}/vall delete force") # supprime les VD (tolérant)
+      storcli(conn, "/c#{cid} set jbod=on", must_succeed: true)
     end
 
     # Recrée un volume matériel à `raid_num` sur tous les disques physiques.
+    # Séquence robuste depuis N'IMPORTE QUEL état (JBOD ou volume existant) :
+    # delete VD → JBOD off → forcer « Unconfigured Good » → add vd. Sans la
+    # remise en « good », storcli répond « resources already in use ».
     def self.recreate!(conn : SSH::Connection, cid : Int32, raid_num : Int32) : Nil
-      slots = parse_drive_slots(conn.exec("#{STORCLI} /c#{cid}/eall/sall show", raise_on_error: false).stdout)
+      slots = parse_drive_slots(storcli(conn, "/c#{cid}/eall/sall show").stdout)
       raise "aucun disque physique listé par storcli (/c#{cid}/eall/sall show)" if slots.empty?
       validate_drive_count!(raid_num, slots.size)
-      conn.exec("#{STORCLI} /c#{cid}/vall delete force", raise_on_error: false)
-      # Disques en JBOD / config étrangère → « Unconfigured Good » obligatoire
-      # avant `add vd`, sinon storcli répond « resources already in use ».
-      conn.exec("#{STORCLI} /c#{cid}/eall/sall set good force", raise_on_error: false)
-      run!(conn, create_vd_command(cid, raid_num, slots))
+      storcli(conn, "/c#{cid}/vall delete force")        # supprime les VD (tolérant)
+      storcli(conn, "/c#{cid} set jbod=off")             # désactive JBOD (tolérant)
+      storcli(conn, "/c#{cid}/eall/sall set good force") # disques → Unconfigured Good (tolérant)
+      storcli(conn, create_vd_command(cid, raid_num, slots), must_succeed: true)
     end
 
-    # Exécute une commande storcli, lève avec sa sortie si échec (storcli
-    # signale « Status = Failure » dans sa sortie en plus du code retour).
-    private def self.run!(conn : SSH::Connection, cmd : String) : Nil
-      res = conn.exec("#{STORCLI} #{cmd}", raise_on_error: false)
+    # Exécute une commande storcli en l'AFFICHANT (transparence sur une
+    # opération destructive + debug in vivo). Si `must_succeed`, lève avec la
+    # sortie storcli en cas d'échec (code retour OU « Status = Failure »).
+    private def self.storcli(conn : SSH::Connection, args : String, must_succeed : Bool = false) : SSH::Result
+      STDERR.puts "    storcli #{args}"
+      res = conn.exec("#{STORCLI} #{args}", raise_on_error: false)
       combined = "#{res.stdout}#{res.stderr}"
-      raise "storcli #{cmd} a échoué :\n#{combined.strip}" if !res.success? || combined.includes?("Status = Failure")
+      if must_succeed && (!res.success? || combined.includes?("Status = Failure"))
+        raise "storcli #{args} a échoué :\n#{combined.strip}"
+      end
+      res
     end
   end
 end
