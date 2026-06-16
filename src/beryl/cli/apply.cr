@@ -188,14 +188,21 @@ module Beryl::CLI::Apply
       end
       shell = Beryl::Apply::SudoShell.new(Beryl::Apply::SshShell.new(conn))
     end
+    vars = {
+      "company"  => host.account_name,
+      "fqdn"     => host.fqdn,
+      "hostname" => host.short_name,
+      "domain"   => host.domain_name,
+    }
+    # IP vRack (déclarée une seule fois via `vrack-interface: { ip }`) → `{{ vrack_ip }}`.
+    # Absente si l'hôte n'est pas dans un vRack : une recette qui y fait référence
+    # échouera alors explicitement (UnknownVariable), ce qui est le bon comportement.
+    if vip = host.vrack_ip
+      vars["vrack_ip"] = vip
+    end
     context = Beryl::Apply::Context.new(
       protected_keys: connecting_pubkeys(host),
-      vars: {
-        "company"  => host.account_name,
-        "fqdn"     => host.fqdn,
-        "hostname" => host.short_name,
-        "domain"   => host.domain_name,
-      },
+      vars: vars,
     )
     recipe_args = {} of String => Array(Hash(String, String))
     requests.each { |req| (recipe_args[req.name] ||= [] of Hash(String, String)) << req.arguments }

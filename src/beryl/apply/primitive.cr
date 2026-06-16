@@ -23,8 +23,9 @@ module Beryl::Apply
   #   `user-update-keys` refuse de les retirer — garde-fou pour ne pas
   #   se couper la branche sur laquelle on est assis en plein apply.
   # * `vars` : variables built-in fournies par beryl (société/`company`,
-  #   `fqdn`, `hostname`, `domain`…), interpolables `{{ … }}` dans toutes
-  #   les recettes — ex. `VersionAddendum: "{{ company }}"`.
+  #   `fqdn`, `hostname`, `domain`, et `vrack_ip` si l'hôte est dans un
+  #   vRack), interpolables `{{ … }}` dans toutes les recettes — ex.
+  #   `VersionAddendum: "{{ company }}"`, `listen {{ vrack_ip }}:80`.
   record Context,
     protected_keys : Array(String) = [] of String,
     vars : Hash(String, String) = {} of String => String

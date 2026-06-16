@@ -16,11 +16,11 @@ COMMENT exécutables ; l'architecture/justification est dans le doc parent.
 | Décision | Choix
 
 | Emplacement builder | **Box dédiée** (pas une jail sur la prod) → isolation totale, aucun toolchain de build sur les serveurs applicatifs.
-| Modèle | **B — dépôt complet** : tout passe par poudriere (reproductibilité totale, immunité aux retraits upstream).
+| Modèle | **A — overlay** (révision 16 juin) : poudriere ne construit QUE ce qui a disparu de l'officiel (EOL) ou qu'on doit personnaliser. Tout le reste vient des paquets OFFICIELS. Les clients activent l'officiel + `quimeo` (priorité quimeo sur ces quelques paquets). Rebuilds courts. On abandonne le « tout-poudriere » initial.
 | Service du dépôt | **vRack `pn-1049829`** (PAS headscale — pivot bastion vRack). nginx sur l'IP vRack du builder.
 | Mesh headscale/tailscale | **CONSERVÉ** dans la build list : les bastions `z` deviennent **serveurs de chiffrement** (déverrouillage des partitions via le mesh — chantier séparé).
 | Clé de signature | Stockée dans le **coffre beryl** (`.env.toml.age`), confinée au builder.
-| Overlay ports | Nouveau dépôt git **`aloli-ports`** (org aloli).
+| Overlay ports | Nouveau dépôt git **`quimeo-ports`** (société QuimeO).
 |===
 
 == 1. Le builder (box dédiée)
@@ -48,34 +48,35 @@ beryl bootstrap builder.quimeo.net                      # FreeBSD 15 + ZFS mirro
   le pool du builder (`/usr/local/etc/poudriere.conf`).
 . **Jail** : `poudriere jail -c -j fbsd150amd64 -v 15.0-RELEASE -a amd64`.
 . **Arbre des ports** : `poudriere ports -c -p default` (+ MAJ régulière).
-. **Overlay** `aloli-ports` (`poudriere -O`) : clone du dépôt git, contient
-  nos ports maison (`chruby`, `ruby27-aloli`, et tout port retiré de l'officiel
+. **Overlay** `quimeo-ports` (`poudriere -O`) : clone du dépôt git, contient
+  nos ports maison (`chruby`, `ruby27-quimeo`, et tout port retiré de l'officiel
   qu'on veut figer — Makefile/distinfo/pkg-plist récupérés de l'historique).
 . **Clé de signature** : générée sur le builder, **clé privée lue depuis le
   coffre** (`beryl env`), publique distribuée aux serveurs (fingerprints).
 . **`poudriere bulk`** de la build list → dépôt signé sous
   `/usr/local/poudriere/data/packages/fbsd150amd64-default/`.
 
-== 3. Build list (modèle B)
+== 3. Build list (modèle A — overlay : UNIQUEMENT l'EOL/custom)
 
-Feuilles installées par la flotte (poudriere tire tout le closure de
-dépendances derrière → des centaines de paquets) :
+RÉVISION 16 juin : on ne reconstruit PAS ce qui est déjà dans les paquets
+officiels. Le dépôt `quimeo` ne contient QUE ce qui a disparu de l'officiel
+ou qu'on doit personnaliser :
 
-[cols="1,4"]
+[cols="1,3,2"]
 |===
-| Catégorie | Paquets
+| Paquet | Pourquoi (absent/inadéquat dans l'officiel) | Source
 
-| Shell/outils | `bash` `zsh` `tmux` `git` `curl` `gmake` `gzip`
-| Web/app | `nginx` `py311-certbot`
-| Bases de données | `mariadb118-server` `mariadb118-client` `postgresql*-server/client`
-| Ruby | `ruby` `ruby-install` `rubygem-bundler` + overlay `ruby27-aloli`
-| Sécurité/libs | `clamav` `ca_root_nss` `openssl111` `libyaml` `readline` `sqlite3`
-| Mesh (CHIFFREMENT) | `headscale` `tailscale` — CONSERVÉS (z = serveurs de déchiffrement)
-| Overlay maison | `chruby` `ruby27-aloli`
+| `openssl111` (libssl 1.1.1) | EOL → retiré des ports | overlay (Makefile/distinfo/plist récupérés de l'historique git)
+| `ruby27-quimeo` (Ruby 2.7.8) | EOL → retiré des ports ; doit être lié à openssl111 | overlay
+| `nginx` `[PASSENGER=on]` | l'officiel ne fournit PAS l'option passenger | `www/nginx` + option (poudriere, modèle cuit — fini le compile runtime/libev)
+| `rubygem-passenger` (ruby 2.7) | intégration passenger pour ruby 2.7 | overlay/option
+| `chruby` + gems/outils figés | figés ou retirés | overlay au cas par cas
 |===
 
-La liste vit dans un fichier poudriere (`bulk -f pkglist`) **versionné** (git),
-unique source de vérité de « ce qu'on déploie ».
+Tout le reste (`bash` `zsh` `git` `tmux` `mariadb` `postgresql` `tailscale`
+`headscale` `clamav` `ca_root_nss`…) vient de l'**OFFICIEL**. La liste des
+paquets `quimeo` vit dans un fichier poudriere (`bulk -f pkglist`)
+**versionné** (git), source de vérité du « custom ».
 
 == 4. Signature (sécurité §2.2 du doc parent)
 
@@ -114,7 +115,7 @@ unique source de vérité de « ce qu'on déploie ».
 |===
 | Étape | Action
 
-| 1 | Commander la box (gamme vRack, 8-16c/32-64Go/2×NVMe). Créer le dépôt git `aloli-ports`.
+| 1 | Commander la box (gamme vRack, 8-16c/32-64Go/2×NVMe). Créer le dépôt git `quimeo-ports`.
 | 2 | `beryl scan/vrack/bootstrap` → FreeBSD 15 + ZFS, dans pn-1049829.
 | 3 | Recette `poudriere-builder` : poudriere + jail 15.0 + overlay + clé de signature.
 | 4 | `poudriere bulk` de la build list → 1er build (≈ quelques heures) → dépôt signé.
