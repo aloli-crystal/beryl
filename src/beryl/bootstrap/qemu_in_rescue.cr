@@ -645,12 +645,20 @@ module Beryl::Bootstrap
       STDERR.puts border
     end
 
+    # Annonce + sleep de grâce (le serveur doit tomber avant qu'on polle,
+    # sinon le 1er SSH réussit sur l'ancienne session). Visible, sinon
+    # ~30 s de silence après le header 7.6 → « où sont les lignes ? ».
+    private def grace_sleep : Nil
+      log "7.6 reboot envoyé — attente #{REBOOT_GRACE_PERIOD.total_seconds.to_i}s que le serveur redémarre avant le polling SSH…"
+      sleep REBOOT_GRACE_PERIOD
+    end
+
     private def reboot_bare_metal : Nil
       # OVH : API boot_from_disk → reboot hardware OVH sur disque.
       if client = @ovh_client
         if svc = @ovh_service_name
           client.dedicated_servers.boot_from_disk(svc)
-          sleep REBOOT_GRACE_PERIOD
+          grace_sleep
           return
         end
       end
@@ -661,7 +669,7 @@ module Beryl::Bootstrap
       if ddx = @dedibox_client
         if sid = @dedibox_server_id
           ddx.servers.reboot_to_disk(sid, reason: "beryl post-bootstrap")
-          sleep REBOOT_GRACE_PERIOD
+          grace_sleep
           return
         end
       end
@@ -679,7 +687,7 @@ module Beryl::Bootstrap
             zone: @scaleway_zone,
             boot_type: ScalewayApi::Endpoints::Baremetal::BootType::Normal,
           )
-          sleep REBOOT_GRACE_PERIOD
+          grace_sleep
           return
         end
       end
@@ -691,7 +699,7 @@ module Beryl::Bootstrap
         "sync && (reboot -f 2>/dev/null || echo b > /proc/sysrq-trigger)",
         raise_on_error: false,
       )
-      sleep REBOOT_GRACE_PERIOD
+      grace_sleep
     end
 
     # Attend que le FreeBSD fraîchement installé réponde en SSH. Pas
