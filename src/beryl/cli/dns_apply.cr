@@ -155,12 +155,18 @@ module Beryl::CLI
       STDERR.puts
       STDERR.puts "Plan DNS pour #{fqdn}"
       STDERR.puts "─" * 60
-      STDERR.puts "  forward (#{dns_provider_name}) : A    #{short}.#{zone}  →  #{ipv4}"
-      STDERR.puts "  forward (#{dns_provider_name}) : AAAA #{short}.#{zone}  →  #{ipv6}" if ipv6
-      STDERR.puts "  reverse (#{compute_provider_name})    : #{ipv4}  →  #{fqdn}"
-      STDERR.puts "  reverse (#{compute_provider_name})    : #{ipv6}  →  #{fqdn}" if ipv6
+      # Labels « action (provider) » alignés sur la plus longue → les `:`
+      # tombent en colonne, même si dns_provider ≠ compute_provider.
+      fwd = "forward (#{dns_provider_name})"
+      rev = "reverse (#{compute_provider_name})"
+      ren = "rename (#{compute_provider_name})"
+      w = [fwd.size, rev.size, ren.size].max
+      STDERR.puts "  #{fwd.ljust(w)} : A    #{short}.#{zone}  →  #{ipv4}"
+      STDERR.puts "  #{fwd.ljust(w)} : AAAA #{short}.#{zone}  →  #{ipv6}" if ipv6
+      STDERR.puts "  #{rev.ljust(w)} : #{ipv4}  →  #{fqdn}"
+      STDERR.puts "  #{rev.ljust(w)} : #{ipv6}  →  #{fqdn}" if ipv6
       if plan.current_display_name != fqdn
-        STDERR.puts "  rename  (#{compute_provider_name})    : #{service_name}  →  #{fqdn}"
+        STDERR.puts "  #{ren.ljust(w)} : #{service_name}  →  #{fqdn}"
       end
       STDERR.puts "─" * 60
 
