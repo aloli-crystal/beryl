@@ -143,32 +143,42 @@ module Beryl::CLI
     end
   end
 
-  # Table des alias courts → nom long. Chaque sous-commande est
-  # adressable via une forme courte (mémoire feedback_cli_short_flags).
-  # Si `name` est déjà un nom long, retourné tel quel.
-  SUBCOMMAND_ALIASES = {
-    "h"  => "help",
-    "i"  => "init",
-    "ap" => "add-provider",
-    "ad" => "add-domain",
-    "ls" => "list-hosts",
-    "sh" => "show",
-    "r"  => "rescue",
-    "bh" => "boot-hd",
-    "w"  => "wipe",
-    "b"  => "bootstrap",
-    "fi" => "follow-install",
-    "s"  => "scan",
-    "a"  => "apply",
-    "pr" => "prep-rescue",
-    "bs" => "bake-seed",
-    "u"  => "unlock",
-    "rb" => "reboot",
-    "st" => "status",
-    "te" => "tang-enroll",
-    "e"  => "env",
-    "v"  => "version",
-  }
+  # Source UNIQUE des sous-commandes : {nom, alias court ("" si aucun),
+  # description}. TRIÉE PAR NOM (règle par défaut : on garde l'ordre
+  # alphabétique en insérant). L'aide ET les alias en sont dérivés → ils
+  # restent triés et cohérents automatiquement.
+  SUBCOMMANDS = [
+    {"add-domain", "ad", "Ajoute un domaine à une société (zone DNS)"},
+    {"add-provider", "ap", "Ajoute un fournisseur à une société (credentials)"},
+    {"apply", "a", "Synchronise packages/users/clés SSH (recettes)"},
+    {"bake-seed", "bs", "cloud-init seed.img pour Ubuntu Server live"},
+    {"boot-hd", "bh", "Bascule sur le disque via l'API (inverse rescue)"},
+    {"bootstrap", "b", "Installe FreeBSD 15 (mfsBSD-in-QEMU)"},
+    {"dns", "", "Pose les records DNS (forward + reverse + rename)"},
+    {"env", "e", "Gère le coffre de credentials chiffré (.env.toml.age)"},
+    {"follow-install", "fi", "Suit l'installation FreeBSD en cours"},
+    {"help", "h", "Aide globale ou d'une sous-commande précise"},
+    {"init", "i", "Initialise ~/.config/beryl/<société>/ + providers/domaines"},
+    {"list-hosts", "ls", "Liste les hôtes de toutes les sociétés"},
+    {"prep-rescue", "pr", "HTTP local pour préparer un rescue Debian"},
+    {"reboot", "rb", "Reboot d'un host (--soft via SSH ou --hard via API)"},
+    {"rescue", "r", "Bascule un hôte en rescue via l'API hébergeur"},
+    {"rotate-key", "", "Rotation des clés SSH d'un host/domaine"},
+    {"scaleway-reinstall", "", "Réinstalle un serveur Scaleway via l'API"},
+    {"scan", "s", "Détecte les disques et propose un YAML host"},
+    {"show", "sh", "Détails d'un hôte (config mergée complète)"},
+    {"status", "st", "État pools / services chiffrés d'un host"},
+    {"tang-enroll", "te", "Enrôle les pools chiffrés via Tang"},
+    {"unlock", "u", "Déverrouille les pools chiffrés (clé locale → SSH)"},
+    {"version", "v", "Affiche la version"},
+    {"vrack", "", "Gère le vRack OVH (statut / rattachement)"},
+    {"wipe", "w", "Efface un disque sur un hôte en rescue"},
+  ]
+
+  # Alias courts → nom long, DÉRIVÉS de SUBCOMMANDS (source unique).
+  SUBCOMMAND_ALIASES = SUBCOMMANDS.each_with_object({} of String => String) do |(name, short, _desc), h|
+    h[short] = name unless short.empty?
+  end
 
   private def self.resolve_alias(name : String?) : String?
     return name unless name
@@ -227,11 +237,18 @@ module Beryl::CLI
       0
     else
       STDERR.puts "beryl : aucune aide pour « #{topic} »."
-      STDERR.puts "        Sous-commandes connues : init, add-provider, add-domain,"
-      STDERR.puts "        list-hosts, show, rescue, boot-hd, wipe, bootstrap,"
-      STDERR.puts "        scan, apply, prep-rescue, bake-seed, version."
+      STDERR.puts "        Sous-commandes connues : #{SUBCOMMANDS.map(&.first).join(", ")}"
       1
     end
+  end
+
+  # Listing des sous-commandes pour l'aide, généré depuis SUBCOMMANDS (déjà
+  # trié) → reste alphabétique automatiquement.
+  private def self.subcommand_listing : String
+    SUBCOMMANDS.map do |name, short, desc|
+      al = short.empty? ? "" : "[#{short}]"
+      "  #{name.ljust(18)} #{al.ljust(5)} #{desc}"
+    end.join("\n")
   end
 
   private def self.usage_banner : String
@@ -240,27 +257,8 @@ module Beryl::CLI
 
     USAGE : beryl [options globales] <sous-commande> [arguments]
 
-    Sous-commandes (chacune a un alias court) :
-      help          [h]     Aide globale ou d'une sous-commande précise
-      init          [i]     Initialise ~/.config/beryl/<société>/ + propose providers/domaines
-      add-provider  [ap]    Ajoute un fournisseur à une société (credentials)
-      add-domain    [ad]    Ajoute un domaine à une société (zone DNS)
-      list-hosts    [ls]    Liste les hôtes de toutes les sociétés
-      show          [sh]    Détails d'un hôte (config mergée complète)
-      rescue        [r]     Bascule un hôte en rescue via l'API hébergeur
-      boot-hd       [bh]    Bascule sur le disque via l'API (inverse rescue)
-      wipe          [w]     Efface un disque sur un hôte en rescue
-      bootstrap     [b]     Installe FreeBSD 15 (mfsBSD-in-QEMU)
-      scan          [s]     Détecte les disques et propose un YAML host
-      dns                   Pose les records DNS (forward via dns_provider + reverse)
-      apply         [a]     Synchronise packages/users/clés SSH
-      prep-rescue   [pr]    HTTP local pour préparer un rescue Debian
-      bake-seed     [bs]    cloud-init seed.img pour Ubuntu Server live
-      unlock        [u]     Déverrouille les pools chiffrés (clé locale → SSH)
-      reboot        [rb]    Reboot d'un host (--soft via SSH ou --hard via API)
-      status        [st]    État pools / services chiffrés d'un host
-      tang-enroll   [te]    Enrôle les pools chiffrés via Tang (Option D)
-      version       [v]     Affiche la version
+    Sous-commandes (ordre alphabétique ; alias court entre crochets) :
+    #{subcommand_listing}
 
     Host : FQDN (ex: rails01.aloli.net), nom court, ou identifiant hébergeur
            (service_name OVH, UUID Scaleway). Ajoutez `--domain=<nom>` si le

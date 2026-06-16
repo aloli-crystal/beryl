@@ -240,7 +240,8 @@ module Beryl::CLI
         STDERR.puts
         STDERR.puts "#{cmd} : forward DNS posé ✓, mais des étapes SECONDAIRES ont échoué :"
         warnings.each { |w| STDERR.puts "  ⚠ #{w}" }
-        STDERR.puts "  (Le host est joignable par son nom. Corrigez le reverse/rename à la main si besoin.)"
+        STDERR.puts "  (Le host reste joignable par son nom — ces étapes sont secondaires.)"
+        STDERR.puts "  → pour rejouer le reverse + rename quand l'API répond : beryl dns #{fqdn}"
       end
       Result.new(Outcome::Applied, short, warnings)
     end

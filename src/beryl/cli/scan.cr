@@ -156,6 +156,7 @@ module Beryl::CLI::Scan
       p.on("-r N", "--raid=N", "Niveau RAID du pool zroot (0|1|5|6|7|10)") { |v| raid_flag = v }
       p.on("--pool=SPEC", "Pool additionnel NAME:DISKS:RAID (répétable, ex: zdata:sda,sdb:10)") { |v| pool_specs << v }
       p.on("-H NAME", "--hostname=NAME", "Nom court à poser (défaut : nom court du FQDN)") { |v| hostname_flag = v }
+      p.on("--host=NAME", "Alias de --hostname") { |v| hostname_flag = v }
       p.on("-z ZONE", "--zone=ZONE", "Zone DNS pour --dns (défaut : le domaine)") { |v| zone_flag = v }
       p.on("-D", "--dns", "Pose records DNS + reverse + rename OVH") { dns_setup = true }
       p.on("-N", "--non-interactive", "Refuse toute invite") { non_interactive = true }
