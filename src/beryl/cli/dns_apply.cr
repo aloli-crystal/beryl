@@ -210,14 +210,22 @@ module Beryl::CLI
           rev.set_reverse(ipv4, fqdn)
           log.call("✓ reverse #{ipv4} → #{fqdn}")
         rescue ex
-          warnings << "reverse IPv4 (#{compute_provider_name}) : #{ex.message}"
+          if reverse_already_set?(ex)
+            log.call("✓ reverse #{ipv4} → #{fqdn} (déjà posé)")
+          else
+            warnings << "reverse IPv4 (#{compute_provider_name}) : #{ex.message}"
+          end
         end
         if v6 = ipv6
           begin
             rev.set_reverse(v6, fqdn)
             log.call("✓ reverse #{v6} → #{fqdn}")
           rescue ex
-            warnings << "reverse IPv6 (#{compute_provider_name}) : #{ex.message}"
+            if reverse_already_set?(ex)
+              log.call("✓ reverse #{v6} → #{fqdn} (déjà posé)")
+            else
+              warnings << "reverse IPv6 (#{compute_provider_name}) : #{ex.message}"
+            end
           end
         end
       else
@@ -244,6 +252,15 @@ module Beryl::CLI
         STDERR.puts "  → pour rejouer le reverse + rename quand l'API répond : beryl dns #{fqdn}"
       end
       Result.new(Outcome::Applied, short, warnings)
+    end
+
+    # Vrai si l'exception est un « reverse déjà posé à la bonne valeur » :
+    # OVH renvoie HTTP 409 « … is already setted » quand le reverse demandé
+    # est DÉJÀ celui en place (le message inclut le reverse voulu). C'est
+    # idempotent → succès, pas un échec.
+    def self.reverse_already_set?(ex : Exception) : Bool
+      msg = ex.message || ""
+      msg.includes?("already setted") || msg.includes?("already set")
     end
   end
 end
