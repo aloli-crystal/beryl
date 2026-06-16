@@ -165,10 +165,6 @@ module Beryl::CLI::Apply
     # Connexion comme le PREMIER user sudo-capable de freebsd.users (le
     # SSH root est coupé sur les hôtes durcis) ; à défaut host.user.
     ssh_user = sudo_user(host) || host.user
-    # Si `sshd-vrack-only` (avec `bastion`) va cacher le host, on inscrit
-    # ssh_host/proxy_jump dans le host.yml AVANT de se connecter et on emprunte
-    # le bastion — sinon fermer le 22 public couperait la session en cours.
-    host = ensure_vrack_access(config_root, host, requests, ssh_user)
     log "cible : #{Beryl.format_ssh_target(host)} (user SSH : #{ssh_user})"
     log "recettes (ordre résolu) : #{recipes.map(&.name).join(" → ")}"
 
@@ -176,7 +172,7 @@ module Beryl::CLI::Apply
     uname = conn.exec("uname -s", raise_on_error: false).stdout.strip
     unless uname == "FreeBSD"
       STDERR.puts "beryl : #{host.fqdn} : connexion #{ssh_user}@ impossible ou pas FreeBSD (uname -s = #{uname.inspect})"
-      if pj = host.proxy_jump
+      if pj = host.proxy_jump(ssh_user)
         STDERR.puts "  (accès via le bastion #{pj} → IP vRack #{host.ssh_host} : est-elle montée et joignable ? " \
                     "appliquez d'abord `vrack-interface` seul, validez, PUIS `sshd-vrack-only`.)"
       end
@@ -307,111 +303,6 @@ module Beryl::CLI::Apply
   # Une recette demandée + ses arguments éventuels (qui surchargent les
   # `parameters` de la recette pour CET hôte).
   record RecipeRequest, name : String, arguments : Hash(String, String)
-
-  # Inscrit l'accès vRack (`ssh_host` = IP vRack, `proxy_jump` =
-  # `<user>@<bastion>.<domaine>`) dans le host.yml quand `sshd-vrack-only` est
-  # demandé avec un argument `bastion`, AVANT toute connexion — pour que fermer
-  # le 22 public ne coupe pas la session (on passe alors par le bastion).
-  # Recharge l'hôte si le fichier a changé ; no-op sinon.
-  private def self.ensure_vrack_access(
-    config_root : String,
-    host : Beryl::Config::ResolvedHost,
-    requests : Array(RecipeRequest),
-    ssh_user : String,
-  ) : Beryl::Config::ResolvedHost
-    return host if host.virtual
-    req = requests.find { |r| r.name == "sshd-vrack-only" }
-    return host unless req
-    bastion_arg = req.arguments["bastion"]?
-    return host if bastion_arg.nil? || bastion_arg.empty?
-
-    vrack_ip = host.vrack_ip
-    unless vrack_ip
-      log "⚠ #{host.fqdn} : sshd-vrack-only avec bastion mais pas d'IP vRack — ssh_host non écrit."
-      return host
-    end
-
-    root = Beryl::Config::Root.load(config_root)
-    bastion_fqdn =
-      if bastion_arg == "auto"
-        derived = derive_bastion(root, vrack_ip)
-        unless derived
-          log "⚠ #{host.fqdn} : bastion `auto` introuvable pour #{vrack_ip} (aucun z au .<dizaine>) — précisez `bastion: <z>`."
-          return host
-        end
-        derived
-      elsif bastion_arg.includes?('.')
-        bastion_arg
-      else
-        "#{bastion_arg}.#{host.domain_name}"
-      end
-    proxy_jump = "#{ssh_user}@#{bastion_fqdn}"
-
-    path = host.node.source_path
-    updated, changed = ensure_connection_fields(File.read(path), vrack_ip, proxy_jump)
-    return host unless changed
-    File.write(path, updated)
-    log "#{host.fqdn} : accès vRack inscrit (ssh_host=#{vrack_ip}, proxy_jump=#{proxy_jump}) → connexion par #{bastion_fqdn}"
-    root.resolve(host.fqdn, account_hint: host.account_name, domain_hint: host.domain_name)
-  end
-
-  # Déduit le FQDN du bastion d'un app server depuis son IP vRack : le chiffre
-  # des DIZAINES du dernier octet = le datacentre, le bastion est le z portant
-  # l'IP `<préfixe>.<dizaine>` (ex. .31 → DC 3 → z à .3). Plan d'adressage OVH :
-  # DC 1 ⇒ .11/.12, DC 2 ⇒ .21/.22, DC 3 ⇒ .31/.32 (un z par DC). nil si
-  # introuvable (dizaine 0, ou aucun host à cette IP).
-  private def self.derive_bastion(root : Beryl::Config::Root, vrack_ip : String) : String?
-    return nil unless bastion_ip = bastion_ip_for(vrack_ip)
-    root.all_hosts_by_fqdn.each_key do |fqdn|
-      h = begin
-        root.resolve(fqdn)
-      rescue
-        next
-      end
-      return h.fqdn if h.vrack_ip == bastion_ip
-    end
-    nil
-  end
-
-  # IP vRack du bastion (z) pour une IP d'app server : `<préfixe>.<dizaine du
-  # dernier octet>` (la dizaine = le datacentre). Ex. `192.168.42.31` → `…​.3`.
-  # nil si la dizaine est 0 (ex. `.4` = builder, `.1`–`.3` = z eux-mêmes) ou
-  # IP malformée. Pur (testé).
-  def self.bastion_ip_for(vrack_ip : String) : String?
-    octets = vrack_ip.split('.')
-    return nil unless octets.size == 4
-    last = octets[3].to_i?
-    return nil unless last
-    dc = last // 10
-    return nil if dc.zero?
-    "#{octets[0]}.#{octets[1]}.#{octets[2]}.#{dc}"
-  end
-
-  # Pose ou met à jour les clés top-level `ssh_host` et `proxy_jump` dans un
-  # host.yml, en préservant tout le reste (commentaires/format). Insère avant
-  # `apply_recipes:` si absentes. Renvoie {contenu, modifié?}. Pur (testé).
-  def self.ensure_connection_fields(content : String, ssh_host : String, proxy_jump : String) : {String, Bool}
-    updated = upsert_top_scalar(content, "ssh_host", ssh_host)
-    updated = upsert_top_scalar(updated, "proxy_jump", proxy_jump)
-    {updated, updated != content}
-  end
-
-  # Remplace la ligne `<key>: …` (clé en colonne 0) si présente, sinon insère
-  # `<key>: <value>` juste avant `apply_recipes:` (ou en fin de fichier).
-  private def self.upsert_top_scalar(content : String, key : String, value : String) : String
-    line = "#{key}: #{value}"
-    lines = content.split('\n')
-    if idx = lines.index(&.starts_with?("#{key}:"))
-      lines[idx] = line
-      return lines.join('\n')
-    end
-    if ar = lines.index(&.starts_with?("apply_recipes:"))
-      lines.insert(ar, line)
-      lines.join('\n')
-    else
-      content.rstrip + "\n#{line}\n"
-    end
-  end
 
   # Recettes d'entrée déclarées en config (`apply_recipes:`), cascadées
   # par le merge (société → domaine → host, append + dédup). Chaque entrée

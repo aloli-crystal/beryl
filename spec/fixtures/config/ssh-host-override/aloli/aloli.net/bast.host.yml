@@ -1,0 +1,4 @@
+provider: local
+bastion: true
+freebsd:
+  hostname: bast

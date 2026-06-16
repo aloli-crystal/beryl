@@ -505,8 +505,32 @@ module Beryl::Config
     # (port 22 public fermé) : beryl ne les joint plus qu'à travers un
     # bastion z. À combiner avec `ssh_host:` = IP vRack du host. nil =
     # connexion directe (cas par défaut).
-    def proxy_jump : String?
-      @merged[YAML::Any.new("proxy_jump")]?.try(&.as_s?)
+    # Champ `bastion:` du host :
+    #   - `true`         → CE host est un bastion (point d'entrée public du vRack).
+    #   - `<nom>`        → host caché, joint VIA le bastion nommé (`bastion_name`).
+    #   - `false`/absent → pas de bastion.
+    def bastion? : Bool
+      @merged[YAML::Any.new("bastion")]?.try(&.as_bool?) == true
+    end
+
+    # Nom (court ou FQDN) du bastion par lequel joindre ce host caché, ou nil
+    # (nil si `bastion:` est un booléen ou absent).
+    def bastion_name : String?
+      @merged[YAML::Any.new("bastion")]?.try(&.as_s?)
+    end
+
+    # ProxyJump effectif. `proxy_jump:` explicite prime ; sinon, si `bastion:
+    # <nom>` est posé, on dérive `<user>@<nom>.<domaine>` (user du saut = celui
+    # de la connexion). nil = connexion directe (cas par défaut).
+    def proxy_jump(connect_user : String? = nil) : String?
+      if explicit = @merged[YAML::Any.new("proxy_jump")]?.try(&.as_s?)
+        return explicit
+      end
+      if name = bastion_name
+        host = name.includes?('.') ? name : "#{name}.#{domain_name}"
+        return "#{connect_user || user}@#{host}"
+      end
+      nil
     end
 
     # IP vRack du host, source de vérité du DNS interne (`beryl vrack-dns`).
@@ -606,6 +630,11 @@ module Beryl::Config
       if explicit = @merged[YAML::Any.new("ssh_host")]?.try(&.as_s?)
         return explicit
       end
+      # Host caché derrière un bastion (`bastion: <nom>`) → on le joint par son
+      # IP vRack (le 22 public est fermé). Le ProxyJump passe par le bastion.
+      if bastion_name && (vip = vrack_ip)
+        return vip
+      end
       if provider == "ovh" && (sn = ovh_service_name)
         return sn
       end
@@ -632,6 +661,7 @@ module Beryl::Config
     # provider.
     def ssh_host_is_provider_name? : Bool
       return false if ssh_host_explicit?
+      return false if bastion_name # vient du bastion (IP vRack), pas du provider
       ssh_host != fqdn
     end
 
@@ -748,13 +778,14 @@ module Beryl::Config
 
     # Construit une `SSH::Connection` prête à l'emploi.
     def connection(user_override : String? = nil) : SSH::Connection
+      eff_user = user_override || user
       opts = {} of String => String
-      if pj = proxy_jump
+      if pj = proxy_jump(eff_user)
         opts["ProxyJump"] = pj
       end
       SSH::Connection.new(
         host: ssh_host,
-        user: user_override || user,
+        user: eff_user,
         port: port,
         identity_file: identity_file,
         options: opts,

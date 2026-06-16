@@ -87,7 +87,9 @@ module Beryl
   #   hébergeur :
   #     `clientvm.test (via 127.0.0.1)`
   def self.format_ssh_target(host : Beryl::Config::ResolvedHost) : String
-    if host.ssh_host_is_provider_name?
+    if bn = host.bastion_name
+      "#{host.fqdn} (via #{host.ssh_host}, bastion #{bn})"
+    elsif host.ssh_host_is_provider_name?
       "#{host.fqdn} (= #{host.ssh_host} côté #{host.provider})"
     elsif host.ssh_host_explicit? && host.ssh_host != host.fqdn
       "#{host.fqdn} (via #{host.ssh_host})"

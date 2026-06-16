@@ -175,6 +175,22 @@ describe Beryl::Config::ResolvedHost do
     rh.connection.user.should eq("root")
   end
 
+  it "bastion: true → le host EST un bastion (pas de routage dérivé)" do
+    rh = Beryl::Config::Root.load(fixture("ssh-host-override")).resolve("bast")
+    rh.bastion?.should be_true
+    rh.bastion_name.should be_nil
+    rh.proxy_jump.should be_nil
+  end
+
+  it "bastion: <nom> → dérive ssh_host (IP vRack) + proxy_jump (user@nom.domaine)" do
+    rh = Beryl::Config::Root.load(fixture("ssh-host-override")).resolve("hidden")
+    rh.bastion?.should be_false
+    rh.bastion_name.should eq("bast")
+    rh.ssh_host.should eq("192.168.42.99")                   # = vrack_ip
+    rh.proxy_jump("admin").should eq("admin@bast.aloli.net") # user de connexion
+    rh.proxy_jump.should eq("admin@bast.aloli.net")          # défaut = host.user (admin)
+  end
+
   it "passe `proxy_jump:` à ssh via un ProxyCommand vers le bastion vRack" do
     rh = Beryl::Config::Root.load(fixture("ssh-host-override")).resolve("clientvm")
     rh.proxy_jump.should eq("deploy@bastion.example.net")

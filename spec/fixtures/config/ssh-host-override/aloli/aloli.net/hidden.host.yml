@@ -1,0 +1,7 @@
+provider: local
+user: admin
+bastion: bast
+apply_recipes:
+  - vrack-interface: { ip: 192.168.42.99 }
+freebsd:
+  hostname: hidden

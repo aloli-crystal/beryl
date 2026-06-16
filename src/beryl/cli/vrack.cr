@@ -48,6 +48,10 @@ module Beryl::CLI
       host = root.resolve(parsed[:host], account_hint: account_hint, domain_hint: domain_hint)
       host.apply_all_credentials_to_env!
 
+      # Choix interactif du rôle bastion (écrit `bastion:` dans le host.yml).
+      # Pas en mode --attach (action OVH délibérée) ni hors terminal.
+      configure_bastion(root, host) if STDIN.tty? && !attach
+
       service = host.ovh_service_name
       unless service
         STDERR.puts "beryl : pas de `ovh.service_name` pour #{host.fqdn} (provider ovh ?)."
@@ -136,6 +140,77 @@ module Beryl::CLI
         STDERR.puts "        - vrack-interface: { ip: 192.168.42.N }"
         STDERR.puts "  puis : beryl apply #{host.fqdn}"
       end
+    end
+
+    # Chooser interactif du rôle bastion → écrit `bastion:` dans le host.yml.
+    private def self.configure_bastion(root : Beryl::Config::Root, host : Beryl::Config::ResolvedHost) : Nil
+      return if host.virtual
+      bastions = bastion_hosts(root)
+      STDERR.puts
+      STDERR.puts "Rôle bastion de #{host.fqdn} (actuel : #{bastion_label(host)}) :"
+      STDERR.puts "  1) ce host EST un bastion          → bastion: true"
+      STDERR.puts "  2) joindre via un bastion existant → bastion: <nom>"
+      STDERR.puts "  3) pas de bastion                  → bastion: false"
+      STDERR.puts "  0) ne rien changer"
+      STDERR.print "Choix [0] : "
+      case (STDIN.gets || "").strip
+      when "1" then write_bastion(host, "true")
+      when "3" then write_bastion(host, "false")
+      when "2" then choose_existing_bastion(host, bastions)
+      else          log "rôle bastion inchangé."
+      end
+    end
+
+    # Hosts marqués `bastion: true` (la liste des bastions), triés par nom.
+    private def self.bastion_hosts(root : Beryl::Config::Root) : Array(Beryl::Config::ResolvedHost)
+      root.all_hosts_by_fqdn.keys.compact_map do |fqdn|
+        h = begin
+          root.resolve(fqdn)
+        rescue
+          next
+        end
+        h.bastion? ? h : nil
+      end.sort_by(&.fqdn)
+    end
+
+    private def self.bastion_label(host : Beryl::Config::ResolvedHost) : String
+      return "EST un bastion (bastion: true)" if host.bastion?
+      if n = host.bastion_name
+        return "via #{n}"
+      end
+      "aucun"
+    end
+
+    private def self.choose_existing_bastion(host : Beryl::Config::ResolvedHost, bastions : Array(Beryl::Config::ResolvedHost)) : Nil
+      if bastions.empty?
+        log "aucun host marqué `bastion: true` — marquez-en un d'abord (choix 1 sur un z)."
+        return
+      end
+      STDERR.puts "  Bastions disponibles :"
+      bastions.each_with_index { |b, i| STDERR.puts "    #{i + 1}) #{b.short_name}  (#{b.fqdn})" }
+      STDERR.print "  Lequel ? : "
+      sel = (STDIN.gets || "").strip.to_i?
+      if sel && (1..bastions.size).includes?(sel)
+        write_bastion(host, bastions[sel - 1].short_name)
+      else
+        log "choix invalide — rien changé."
+      end
+    end
+
+    # Pose/maj la clé top-level `bastion:` dans le host.yml (préserve le reste).
+    private def self.write_bastion(host : Beryl::Config::ResolvedHost, value : String) : Nil
+      path = host.node.source_path
+      lines = File.read(path).split('\n')
+      line = "bastion: #{value}"
+      if idx = lines.index(&.starts_with?("bastion:"))
+        lines[idx] = line
+      elsif ar = lines.index(&.starts_with?("apply_recipes:"))
+        lines.insert(ar, line)
+      else
+        lines << line
+      end
+      File.write(path, lines.join('\n'))
+      log "#{host.fqdn} : #{line} (écrit dans #{File.basename(path)})"
     end
 
     private def self.log(message : String) : Nil
