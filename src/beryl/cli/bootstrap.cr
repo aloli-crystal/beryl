@@ -272,6 +272,30 @@ module Beryl::CLI::Bootstrap
 
     # Résolution du provider : --provider CLI gagne, sinon celui du merge.
     effective_provider = provider_override || host.provider
+
+    # GARDE-FOU boot-sur-disque : pour rebasculer le serveur sur le disque
+    # APRÈS l'install, beryl appelle l'API hébergeur (boot_from_disk OVH,
+    # reboot_to_disk Dedibox, reboot Normal Scaleway). Sans l'identifiant
+    # nécessaire, `reboot_bare_metal` retombe sur `reboot -f` côté rescue →
+    # le netboot reste sur RESCUE → le serveur REVIENT EN RESCUE au lieu du
+    # FreeBSD installé, et le polling 7.6 tourne dans le vide. On ÉCHOUE TÔT.
+    id_field = case effective_provider
+               when "ovh"      then host.ovh_service_name ? nil : "ovh.service_name"
+               when "dedibox"  then host.dedibox_server_id ? nil : "dedibox.server_id"
+               when "scaleway" then host.scaleway_server_id ? nil : "scaleway.server_id"
+               else                 nil
+               end
+    if missing = id_field
+      STDERR.puts "beryl : provider=#{effective_provider} mais `#{missing}` absent du host.yml de #{host.fqdn}."
+      STDERR.puts "  → beryl ne pourrait PAS rebasculer le boot sur le disque après l'install :"
+      STDERR.puts "    le serveur reviendrait dans le RESCUE (le polling SSH tournerait à vide)."
+      STDERR.puts "  Ajoutez l'identifiant au host.yml, ex. :"
+      STDERR.puts "      #{effective_provider}:"
+      STDERR.puts "        #{missing.split('.').last}: <id hébergeur>"
+      STDERR.puts "  (ou re-scannez par l'identifiant hébergeur plutôt que par le FQDN)."
+      return EXIT_USAGE
+    end
+
     ovh_client = nil
     if effective_provider == "ovh" && host.ovh_service_name
       ovh_client = Beryl::CLI::Credentials.ovh_client
