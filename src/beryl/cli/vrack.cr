@@ -102,6 +102,7 @@ module Beryl::CLI
         # nil = task purgée par OVH une fois terminée → on considère OK.
         if status.nil? || status == "done"
           log "✅ #{service} rattaché au vRack #{target}. L'interface privée (ix1) montera dans quelques minutes."
+          log "ℹ le rattachement peut REDÉMARRER le serveur → si vous enchaînez un bootstrap, re-lancez d'abord `beryl rescue #{host.fqdn}`."
           warn_if_no_vrack_ip(host)
           return EXIT_OK
         end
