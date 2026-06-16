@@ -509,6 +509,26 @@ module Beryl::Config
       @merged[YAML::Any.new("proxy_jump")]?.try(&.as_s?)
     end
 
+    # IP vRack du host, source de vérité du DNS interne (`beryl vrack-dns`).
+    # Lue d'un champ explicite `vrack_ip:` ou, à défaut, des arguments de la
+    # recette `vrack-interface` dans `apply_recipes:` (`{ ip: 192.168.42.x }`).
+    # nil si le host n'est pas sur le vRack.
+    def vrack_ip : String?
+      if explicit = @merged[YAML::Any.new("vrack_ip")]?.try(&.as_s?)
+        return explicit
+      end
+      arr = @merged[YAML::Any.new("apply_recipes")]?.try(&.as_a?)
+      return nil unless arr
+      arr.each do |entry|
+        args = entry.as_h?.try(&.[YAML::Any.new("vrack-interface")]?).try(&.as_h?)
+        next unless args
+        if ip = args[YAML::Any.new("ip")]?.try(&.as_s?)
+          return ip
+        end
+      end
+      nil
+    end
+
     # URL d'un binaire `storcli64` (Linux) à récupérer dans le rescue pour
     # piloter un contrôleur RAID matériel (MegaRAID…). Le rescue OVH ne
     # fournit aucun outil contrôleur → beryl le `curl` depuis ici. Hébergé
