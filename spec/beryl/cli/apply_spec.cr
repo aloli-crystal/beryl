@@ -45,4 +45,18 @@ describe Beryl::CLI::Apply do
       updated.should contain("proxy_jump: u@b")
     end
   end
+
+  describe ".bastion_ip_for" do
+    it "déduit le z du datacentre = <préfixe>.<dizaine>" do
+      Beryl::CLI::Apply.bastion_ip_for("192.168.42.31").should eq("192.168.42.3") # DC3
+      Beryl::CLI::Apply.bastion_ip_for("192.168.42.11").should eq("192.168.42.1") # DC1
+      Beryl::CLI::Apply.bastion_ip_for("192.168.42.22").should eq("192.168.42.2") # DC2
+    end
+
+    it "nil pour les IP sans datacentre (dizaine 0) ou malformées" do
+      Beryl::CLI::Apply.bastion_ip_for("192.168.42.4").should be_nil # builder
+      Beryl::CLI::Apply.bastion_ip_for("192.168.42.3").should be_nil # un z lui-même
+      Beryl::CLI::Apply.bastion_ip_for("pas-une-ip").should be_nil
+    end
+  end
 end

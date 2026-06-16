@@ -322,15 +322,29 @@ module Beryl::CLI::Apply
     return host if host.virtual
     req = requests.find { |r| r.name == "sshd-vrack-only" }
     return host unless req
-    bastion = req.arguments["bastion"]?
-    return host if bastion.nil? || bastion.empty?
+    bastion_arg = req.arguments["bastion"]?
+    return host if bastion_arg.nil? || bastion_arg.empty?
 
     vrack_ip = host.vrack_ip
     unless vrack_ip
       log "⚠ #{host.fqdn} : sshd-vrack-only avec bastion mais pas d'IP vRack — ssh_host non écrit."
       return host
     end
-    bastion_fqdn = bastion.includes?('.') ? bastion : "#{bastion}.#{host.domain_name}"
+
+    root = Beryl::Config::Root.load(config_root)
+    bastion_fqdn =
+      if bastion_arg == "auto"
+        derived = derive_bastion(root, vrack_ip)
+        unless derived
+          log "⚠ #{host.fqdn} : bastion `auto` introuvable pour #{vrack_ip} (aucun z au .<dizaine>) — précisez `bastion: <z>`."
+          return host
+        end
+        derived
+      elsif bastion_arg.includes?('.')
+        bastion_arg
+      else
+        "#{bastion_arg}.#{host.domain_name}"
+      end
     proxy_jump = "#{ssh_user}@#{bastion_fqdn}"
 
     path = host.node.source_path
@@ -338,8 +352,39 @@ module Beryl::CLI::Apply
     return host unless changed
     File.write(path, updated)
     log "#{host.fqdn} : accès vRack inscrit (ssh_host=#{vrack_ip}, proxy_jump=#{proxy_jump}) → connexion par #{bastion_fqdn}"
-    Beryl::Config::Root.load(config_root).resolve(
-      host.fqdn, account_hint: host.account_name, domain_hint: host.domain_name)
+    root.resolve(host.fqdn, account_hint: host.account_name, domain_hint: host.domain_name)
+  end
+
+  # Déduit le FQDN du bastion d'un app server depuis son IP vRack : le chiffre
+  # des DIZAINES du dernier octet = le datacentre, le bastion est le z portant
+  # l'IP `<préfixe>.<dizaine>` (ex. .31 → DC 3 → z à .3). Plan d'adressage OVH :
+  # DC 1 ⇒ .11/.12, DC 2 ⇒ .21/.22, DC 3 ⇒ .31/.32 (un z par DC). nil si
+  # introuvable (dizaine 0, ou aucun host à cette IP).
+  private def self.derive_bastion(root : Beryl::Config::Root, vrack_ip : String) : String?
+    return nil unless bastion_ip = bastion_ip_for(vrack_ip)
+    root.all_hosts_by_fqdn.each_key do |fqdn|
+      h = begin
+        root.resolve(fqdn)
+      rescue
+        next
+      end
+      return h.fqdn if h.vrack_ip == bastion_ip
+    end
+    nil
+  end
+
+  # IP vRack du bastion (z) pour une IP d'app server : `<préfixe>.<dizaine du
+  # dernier octet>` (la dizaine = le datacentre). Ex. `192.168.42.31` → `…​.3`.
+  # nil si la dizaine est 0 (ex. `.4` = builder, `.1`–`.3` = z eux-mêmes) ou
+  # IP malformée. Pur (testé).
+  def self.bastion_ip_for(vrack_ip : String) : String?
+    octets = vrack_ip.split('.')
+    return nil unless octets.size == 4
+    last = octets[3].to_i?
+    return nil unless last
+    dc = last // 10
+    return nil if dc.zero?
+    "#{octets[0]}.#{octets[1]}.#{octets[2]}.#{dc}"
   end
 
   # Pose ou met à jour les clés top-level `ssh_host` et `proxy_jump` dans un
