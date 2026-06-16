@@ -22,6 +22,16 @@ describe Beryl::Apply::FileWrite do
     shell.ran?(/chmod 0644/).should be_true
   end
 
+  it "crée le répertoire parent avant d'écrire (mkdir -p)" do
+    shell = FakeShell.new
+    shell.stub(/sha256 -q/, stdout: "")
+    prim("file-write").apply(
+      shell,
+      apply_params({path: "/usr/local/etc/ssl/certs/quimeo.cert", content: "x\n", mode: "0644"}.to_yaml),
+      dry_run: false, context: ctx)
+    shell.ran?(%r{mkdir -p /usr/local/etc/ssl/certs}).should be_true
+  end
+
   it "corrige le propriétaire même si le contenu est à jour" do
     content = "abc\n"
     shell = FakeShell.new

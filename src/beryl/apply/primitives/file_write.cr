@@ -51,7 +51,14 @@ module Beryl::Apply
       # sudo/SFTP) avec un mode par défaut → après TOUTE écriture il faut
       # re-poser mode ET owner, même s'ils « correspondaient » avant (sinon
       # ils repassent à root/0644 à chaque changement de contenu).
-      shell.write_file(path, content) if need_write
+      if need_write
+        # Garantit le répertoire parent (l'`install`/`cat >` sous-jacent ne le
+        # crée pas, et FreeBSD n'a pas le `install -D` de GNU). `mkdir -p` est
+        # idempotent ; via `shell.exec` il passe par sudo si besoin.
+        dir = File.dirname(path)
+        shell.exec("mkdir -p #{Process.quote(dir)}") unless dir == "/" || dir == "."
+        shell.write_file(path, content)
+      end
       if mode && (need_chmod || need_write)
         shell.exec("chmod #{Process.quote(mode)} #{Process.quote(path)}")
       end
