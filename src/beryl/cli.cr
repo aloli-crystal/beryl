@@ -9,6 +9,7 @@ require "./cli/apply"
 require "./cli/rotate_key"
 require "./cli/vrack"
 require "./cli/vrack_dns"
+require "./cli/vrack_ip"
 require "./cli/scan"
 require "./cli/dns"
 require "./cli/init"
@@ -129,6 +130,7 @@ module Beryl::CLI
     when "rotate-key"         then Beryl::CLI::RotateKey.run(config_root, sub_args)
     when "vrack"              then Beryl::CLI::Vrack.run(config_root, sub_args)
     when "vrack-dns"          then Beryl::CLI::VrackDns.run(config_root, sub_args)
+    when "vrack-ip"           then Beryl::CLI::VrackIp.run(config_root, sub_args)
     when "prep-rescue"        then Beryl::CLI::PrepRescue.run(sub_args)
     when "bake-seed"          then Beryl::CLI::BakeSeed.run(sub_args)
     when "scaleway-reinstall" then Beryl::CLI::ScalewayReinstall.run(config_root, sub_args)
@@ -175,6 +177,7 @@ module Beryl::CLI
     {"version", "v", "Affiche la version"},
     {"vrack", "", "Gère le vRack OVH (statut / rattachement)"},
     {"vrack-dns", "", "Génère/déploie le DNS interne du vRack (vrack.quimeo.net)"},
+    {"vrack-ip", "", "Valide/consolide la numérotation des IP vRack (vrack.yml)"},
     {"wipe", "w", "Efface un disque sur un hôte en rescue"},
   ]
 
