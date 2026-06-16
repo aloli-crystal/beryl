@@ -3,17 +3,17 @@ require "yaml"
 require "../config"
 
 module Beryl::CLI
-  # `beryl vrack-ip [--check|--gather|--distribute] [-a société]` : gère la
+  # `beryl vrack-ip [--check|--collect|--distribute] [-a société]` : gère la
   # numérotation des IP vRack de façon centralisée.
   #
   #   --check       (défaut) valide TOUTE la numérotation : collisions, IP
   #                 hors sous-réseau. Exit ≠ 0 si un problème. C'est le
   #                 garde-fou contre deux hôtes sur la même IP.
-  #   --gather      hosts → fichier consolidé `<société>/vrack.yml`.
+  #   --collect      hosts → fichier consolidé `<société>/vrack.yml`.
   #   --distribute  fichier consolidé → host.yml (injecte l'IP, préserve
   #                 commentaires/format).
   #
-  # Source de vérité = vous : `--gather` et `--distribute` sont explicites,
+  # Source de vérité = vous : `--collect` et `--distribute` sont explicites,
   # aucun sens n'écrase l'autre tout seul ; `--check` valide toujours.
   module VrackIp
     EXIT_OK      = 0
@@ -30,9 +30,9 @@ module Beryl::CLI
       mode = :check
       account_hint : String? = nil
       parser = OptionParser.new do |p|
-        p.banner = "USAGE : beryl vrack-ip [--check|--gather|--distribute] [-a société]"
+        p.banner = "USAGE : beryl vrack-ip [--check|--collect|--distribute] [-a société]"
         p.on("--check", "Valide la numérotation (défaut) : collisions, hors-réseau") { mode = :check }
-        p.on("--gather", "hosts → <société>/vrack.yml") { mode = :gather }
+        p.on("--collect", "hosts → <société>/vrack.yml") { mode = :collect }
         p.on("--distribute", "<société>/vrack.yml → host.yml") { mode = :distribute }
         p.on("-a NAME", "--account=NAME", "Limiter à une société") { |v| account_hint = v }
         p.on("-h", "--help", "Aide") { puts p; exit 0 }
@@ -54,7 +54,7 @@ module Beryl::CLI
       end
 
       case mode
-      when :gather     then gather_all(by_account)
+      when :collect    then collect_all(by_account)
       when :distribute then distribute_all(root, by_account)
       else                  check_all(by_account)
       end
@@ -109,7 +109,7 @@ module Beryl::CLI
     def self.render(vrack : String, subnet : String, entries : Array(Entry)) : String
       String.build do |io|
         io << "# Registre des IP vRack — maintenu par `beryl vrack-ip`.\n"
-        io << "#   --gather (hosts→ici) · --distribute (ici→hosts) · --check (validation)\n"
+        io << "#   --collect (hosts→ici) · --distribute (ici→hosts) · --check (validation)\n"
         io << "vrack: #{vrack}\n"
         io << "subnet: #{subnet}\n"
         io << "hosts:\n"
@@ -178,7 +178,7 @@ module Beryl::CLI
       end
     end
 
-    private def self.gather_all(by_account : Hash(Beryl::Config::Account, Array(Entry))) : Int32
+    private def self.collect_all(by_account : Hash(Beryl::Config::Account, Array(Entry))) : Int32
       by_account.each do |account, entries|
         path = File.join(account.path, REGISTRY_FILE)
         vrack = registry_field(account, "vrack") || "pn-XXXX (à renseigner)"
@@ -198,7 +198,7 @@ module Beryl::CLI
       by_account.each_key do |account|
         path = File.join(account.path, REGISTRY_FILE)
         unless File.exists?(path)
-          STDERR.puts "  ⚠ #{account.name} : pas de #{REGISTRY_FILE} — lancez d'abord `--gather`."
+          STDERR.puts "  ⚠ #{account.name} : pas de #{REGISTRY_FILE} — lancez d'abord `--collect`."
           next
         end
         registry = parse_registry(File.read(path))
