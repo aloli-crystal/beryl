@@ -117,6 +117,27 @@ module Beryl::Providers
       nil
     end
 
+    # Cherche le service_name d'un serveur dédié OVH par son IP principale
+    # (v4). nil si aucun match. Itère `/dedicated/server` puis lit l'`ip` de
+    # chacun — permet de scanner un host par FQDN/IP sans connaître son
+    # service_name. Couvert par `GET /dedicated/server` + `/dedicated/server/*`.
+    def find_dedicated_server_by_ip(ip : String) : String?
+      resp = client.call("GET", "/dedicated/server")
+      return nil unless resp
+      resp.as_a.each do |s|
+        sn = s.as_s?
+        next unless sn
+        details = begin
+          client.call("GET", "/dedicated/server/#{sn}")
+        rescue
+          next
+        end
+        next unless details
+        return sn if details["ip"]?.try(&.as_s?) == ip
+      end
+      nil
+    end
+
     # --- vRack (réseau privé OVH) ---
 
     # Noms de service des vRacks du compte (ex. "pn-12345").

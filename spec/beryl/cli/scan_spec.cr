@@ -91,6 +91,12 @@ describe Beryl::CLI::Scan do
     end
   end
 
+  describe ".resolve_host_ipv4" do
+    it "renvoie l'IP telle quelle si déjà une IPv4 (pas de DNS)" do
+      Beryl::CLI::Scan.resolve_host_ipv4("51.210.0.22").should eq("51.210.0.22")
+    end
+  end
+
   describe ".merge_scan_into" do
     it "rafraîchit les champs scan et préserve les ajouts de l'opérateur" do
       existing = <<-YAML

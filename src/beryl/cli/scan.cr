@@ -1,4 +1,5 @@
 require "option_parser"
+require "socket"
 require "api-ovh/ovh_api"
 require "api-scaleway/scaleway_api"
 require "api-dedibox/dedibox_api"
@@ -384,9 +385,17 @@ module Beryl::CLI::Scan
       end
     end
 
+    # OVH + service_name inconnu (host scanné par FQDN/IP) → on le résout
+    # via l'API (match de l'IP). INDISPENSABLE : sans service_name, le
+    # bootstrap ne peut pas faire boot_from_disk → le serveur revient en
+    # rescue (cf. garde-fou bootstrap).
+    ovh_sn_override = nil
+    if (provider_override || host.provider) == "ovh" && host.ovh_service_name.nil?
+      ovh_sn_override = resolve_ovh_service_name(host)
+    end
     yaml = render_yaml(host, short, pools,
       provider_override: provider_override, server_id_override: server_id_flag,
-      scaleway_zone_override: scaleway_zone_override)
+      scaleway_zone_override: scaleway_zone_override, ovh_service_name_override: ovh_sn_override)
     target = resolve_write_target(write_path, write_auto, config_root, host.account_name, host.domain_name, short)
 
     if target
@@ -983,6 +992,7 @@ module Beryl::CLI::Scan
     provider_override : String? = nil,
     server_id_override : String? = nil,
     scaleway_zone_override : String? = nil,
+    ovh_service_name_override : String? = nil,
   ) : String
     String.build do |io|
       io << "# Généré par `beryl scan` le " << Beryl.format_timestamp(Time.local) << '\n'
@@ -998,7 +1008,7 @@ module Beryl::CLI::Scan
         io << "provider: " << effective_provider << '\n'
         case effective_provider
         when "ovh"
-          if sn = host.ovh_service_name
+          if sn = (ovh_service_name_override || host.ovh_service_name)
             io << "ovh:\n  service_name: " << sn << '\n'
           end
         when "scaleway"
@@ -1085,6 +1095,36 @@ module Beryl::CLI::Scan
     (old_fb.as_h? || {} of YAML::Any => YAML::Any).each { |k, v| merged[k] = v }
     (scan_fb.as_h? || {} of YAML::Any => YAML::Any).each { |k, v| merged[k] = v }
     YAML::Any.new(merged)
+  end
+
+  # Résout le service_name OVH d'un host scanné par FQDN/IP, via l'API
+  # (match de l'IP principale). nil si non joignable, credentials absents,
+  # IP non résolue, ou aucun match. JAMAIS bloquant.
+  private def self.resolve_ovh_service_name(host : Beryl::Config::ResolvedHost) : String?
+    ip = resolve_host_ipv4(host.ssh_host)
+    return nil unless ip
+    host.apply_all_credentials_to_env!
+    ovh = Beryl::Providers::Ovh.new
+    return nil unless ovh.available?
+    STDERR.puts "  → résolution du service_name OVH via l'API (IP #{ip})…"
+    sn = ovh.find_dedicated_server_by_ip(ip)
+    if sn
+      STDERR.puts "  ✓ service_name OVH = #{sn}"
+    else
+      STDERR.puts "  ⚠ aucun serveur dédié OVH avec l'IP #{ip} — `ovh.service_name` à mettre à la main."
+    end
+    sn
+  rescue ex
+    STDERR.puts "  ⚠ résolution service_name OVH impossible (#{ex.message}) — à mettre à la main."
+    nil
+  end
+
+  # Résout une IPv4 depuis un host : déjà une IP → tel quel ; sinon DNS (A).
+  def self.resolve_host_ipv4(host : String) : String?
+    return host if host =~ /\A\d{1,3}(\.\d{1,3}){3}\z/
+    Socket::Addrinfo.resolve(host, 22, family: Socket::Family::INET, type: Socket::Type::STREAM).first?.try(&.ip_address.address)
+  rescue
+    nil
   end
 
   def self.default_hostname(fqdn : String) : String
