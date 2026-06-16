@@ -65,6 +65,7 @@ module Beryl::CLI
       current = provider.vrack_of_server(service)
       if current
         log "✅ #{service} est DÉJÀ dans le vRack #{current}."
+        warn_if_no_vrack_ip(host)
         return EXIT_OK
       end
 
@@ -101,6 +102,7 @@ module Beryl::CLI
         # nil = task purgée par OVH une fois terminée → on considère OK.
         if status.nil? || status == "done"
           log "✅ #{service} rattaché au vRack #{target}. L'interface privée (ix1) montera dans quelques minutes."
+          warn_if_no_vrack_ip(host)
           return EXIT_OK
         end
         log "  task #{task_id} : #{status}"
@@ -115,6 +117,24 @@ module Beryl::CLI
       STDERR.puts "beryl : erreur vrack — #{ex.class}: #{ex.message}"
       STDERR.puts "  (refus d'accès /vrack ? Ré-autorisez la clé OVH : les droits ont changé, regénérez les credentials.)"
       EXIT_UNEXPECTED
+    end
+
+    # Rattacher côté OVH ne suffit pas : sans `vrack-interface` dans le
+    # host.yml, le serveur n'a pas d'IP privée. On le vérifie et on rappelle
+    # quoi ajouter (l'IP vient de ResolvedHost#vrack_ip).
+    private def self.warn_if_no_vrack_ip(host : Beryl::Config::ResolvedHost) : Nil
+      if ip = host.vrack_ip
+        log "config OK : #{host.fqdn} déclare une IP vRack (#{ip})."
+      else
+        short = host.fqdn.split('.').first
+        STDERR.puts
+        STDERR.puts "⚠ #{host.fqdn} : rattaché au vRack côté OVH, mais le host.yml n'a PAS de"
+        STDERR.puts "  `vrack-interface` → pas d'IP privée tant qu'on ne l'ajoute pas. Dans"
+        STDERR.puts "  #{short}.host.yml :"
+        STDERR.puts "      apply_recipes:"
+        STDERR.puts "        - vrack-interface: { ip: 192.168.42.N }"
+        STDERR.puts "  puis : beryl apply #{host.fqdn}"
+      end
     end
 
     private def self.log(message : String) : Nil
