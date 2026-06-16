@@ -175,10 +175,15 @@ describe Beryl::Config::ResolvedHost do
     rh.connection.user.should eq("root")
   end
 
-  it "passe `proxy_jump:` à ssh via -o ProxyJump (bastion vRack)" do
+  it "passe `proxy_jump:` à ssh via un ProxyCommand vers le bastion vRack" do
     rh = Beryl::Config::Root.load(fixture("ssh-host-override")).resolve("clientvm")
     rh.proxy_jump.should eq("deploy@bastion.example.net")
-    rh.connection.ssh_args("true").should contain("ProxyJump=deploy@bastion.example.net")
+    # Le shard ssh (>= 0.2.4) convertit `ProxyJump` en `ProxyCommand` explicite
+    # (pour transporter la clé `-i` jusqu'au bastion sous `-F /dev/null`).
+    joined = rh.connection.ssh_args("true").join(" ")
+    joined.should_not contain("ProxyJump=")
+    joined.should contain("ProxyCommand=")
+    joined.should contain("-W %h:%p deploy@bastion.example.net")
   end
 
   it "expose les accesseurs freebsd (hostname, disks, timezone)" do

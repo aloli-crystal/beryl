@@ -34,7 +34,7 @@ shards:
 
   ssh:
     git: https://github.com/aloli-crystal/ssh.git
-    version: 0.2.2+git.commit.c60079d403ca2903004355dd1ce2ab3b48b94b00
+    version: 0.2.4+git.commit.02a28a112c4218a9a77826cb156024222261863e
 
   toml:
     git: https://github.com/aloli-crystal/toml.git
