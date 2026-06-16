@@ -26,6 +26,14 @@ module Beryl::CLI
     # Une IP vRack déclarée par un host (nom court + IP + fichier source).
     record Entry, host : String, ip : String, source_path : String
 
+    # Dérive entre le registre `vrack.yml` et les `host.yml`.
+    enum DriftKind
+      Differs           # registre ≠ host
+      MissingOnHost     # dans le registre, mais le host n'a pas d'IP
+      MissingInRegistry # IP côté host, mais absente du registre
+    end
+    record Drift, host : String, kind : DriftKind, registry_ip : String?, host_ip : String?
+
     def self.run(config_root : String, args : Array(String)) : Int32
       mode = :check
       account_hint : String? = nil
@@ -100,9 +108,40 @@ module Beryl::CLI
       base.split('.').first(3).join('.') + "."
     end
 
+    # IP invalide pour un hôte : dernier octet 0 (réseau) ou 255 (broadcast). Pur.
+    def self.invalid_host_ip?(ip : String) : Bool
+      last = ip.split('.').last?.try(&.to_i?)
+      last == 0 || last == 255
+    end
+
+    # Dérive entre le registre (host→ip de vrack.yml) et les IP des host.yml. Pur.
+    def self.drift(registry : Hash(String, String), entries : Array(Entry)) : Array(Drift)
+      host_ips = {} of String => String
+      entries.each { |e| host_ips[e.host] = e.ip }
+      (registry.keys + host_ips.keys).uniq!.sort!.compact_map do |h|
+        r = registry[h]?
+        v = host_ips[h]?
+        if r && v
+          r == v ? nil : Drift.new(h, DriftKind::Differs, r, v)
+        elsif r
+          Drift.new(h, DriftKind::MissingOnHost, r, nil)
+        else
+          Drift.new(h, DriftKind::MissingInRegistry, nil, v)
+        end
+      end
+    end
+
     # Clé de tri par dernier octet numérique.
     def self.ip_sort_key(ip : String) : Array(Int32)
       ip.split('.').map(&.to_i)
+    end
+
+    # Noms qu'YAML 1.1 interprète comme booléen/null s'ils ne sont pas quotés
+    # (« problème norvégien » : `no` → false). On les quote dans `render`.
+    YAML_AMBIGUOUS = %w[no yes true false on off null nil ~ y n]
+
+    private def self.yaml_key(name : String) : String
+      YAML_AMBIGUOUS.includes?(name.downcase) ? %("#{name}") : name
     end
 
     # Rend le `vrack.yml` consolidé (trié par IP). Pur.
@@ -114,7 +153,7 @@ module Beryl::CLI
         io << "subnet: #{subnet}\n"
         io << "hosts:\n"
         entries.sort_by { |e| ip_sort_key(e.ip) }.each do |e|
-          io << "  #{e.host}: #{e.ip}\n"
+          io << "  #{yaml_key(e.host)}: #{e.ip}\n"
         end
       end
     end
@@ -138,7 +177,12 @@ module Beryl::CLI
       reg = {} of String => String
       doc = YAML.parse(yaml)
       if hosts = doc["hosts"]?
-        hosts.as_h.each { |k, v| reg[k.as_s] = v.as_s }
+        hosts.as_h.each do |k, v|
+          # Résilient : une clé non-string (cf. problème norvégien sur un fichier
+          # non quoté) est ignorée plutôt que de faire échouer tout le parse.
+          next unless key = k.as_s?
+          reg[key] = v.as_s? || v.raw.to_s
+        end
       end
       reg
     rescue
@@ -148,34 +192,58 @@ module Beryl::CLI
     # ─── Modes (IO en périphérie) ───────────────────────────────────────────
 
     private def self.check_all(by_account : Hash(Beryl::Config::Account, Array(Entry))) : Int32
-      problems = 0
+      errors = 0
+      warnings = 0
       by_account.each do |account, entries|
         subnet = registry_field(account, "subnet") || DEFAULT_SUBNET
         log "société #{account.name} — #{entries.size} hôte(s), sous-réseau #{subnet}"
 
-        cols = collisions(entries)
-        cols.each do |ip, hosts|
-          problems += 1
+        collisions(entries).each do |ip, hosts|
+          errors += 1
           STDERR.puts "  ✗ COLLISION #{ip} ← #{hosts.sort.join(", ")}"
         end
-
-        oos = out_of_subnet(entries, subnet)
-        oos.each do |e|
-          problems += 1
+        out_of_subnet(entries, subnet).each do |e|
+          errors += 1
           STDERR.puts "  ✗ HORS-RÉSEAU #{e.host} → #{e.ip} (hors #{subnet})"
         end
+        entries.select { |e| invalid_host_ip?(e.ip) }.each do |e|
+          errors += 1
+          STDERR.puts "  ✗ IP INVALIDE #{e.host} → #{e.ip} (adresse réseau/broadcast)"
+        end
 
-        if cols.empty? && oos.empty?
-          entries.sort_by { |e| ip_sort_key(e.ip) }.each { |e| log "  ✓ #{e.ip.ljust(15)} #{e.host}" }
+        # Dérive registre ↔ hosts (uniquement si vrack.yml existe).
+        if registry = load_registry(account)
+          drift(registry, entries).each do |d|
+            case d.kind
+            in .differs?
+              errors += 1
+              STDERR.puts "  ✗ DÉRIVE #{d.host} : vrack.yml=#{d.registry_ip} ≠ host.yml=#{d.host_ip}"
+            in .missing_on_host?
+              warnings += 1
+              STDERR.puts "  ⚠ #{d.host} : dans vrack.yml (#{d.registry_ip}) mais pas d'IP côté host"
+            in .missing_in_registry?
+              warnings += 1
+              STDERR.puts "  ⚠ #{d.host} : IP #{d.host_ip} côté host, absente de vrack.yml (→ --collect)"
+            end
+          end
         end
       end
-      if problems.zero?
-        log "numérotation vRack OK ✅"
-        EXIT_OK
-      else
-        STDERR.puts "beryl : #{problems} problème(s) de numérotation vRack."
+
+      log "numérotation vRack cohérente ✅" if errors.zero? && warnings.zero?
+      if errors > 0
+        STDERR.puts "beryl : #{errors} incohérence(s)#{warnings > 0 ? " + #{warnings} avertissement(s)" : ""} vRack."
         EXIT_PROBLEM
+      else
+        log "#{warnings} avertissement(s) (pas bloquant)" if warnings > 0
+        EXIT_OK
       end
+    end
+
+    # Charge le registre `vrack.yml` de la société (host→ip), ou nil si absent.
+    private def self.load_registry(account : Beryl::Config::Account) : Hash(String, String)?
+      path = File.join(account.path, REGISTRY_FILE)
+      return nil unless File.exists?(path)
+      parse_registry(File.read(path))
     end
 
     private def self.collect_all(by_account : Hash(Beryl::Config::Account, Array(Entry))) : Int32

@@ -63,6 +63,35 @@ describe Beryl::CLI::VrackIp do
     end
   end
 
+  describe ".invalid_host_ip?" do
+    it "rejette réseau (.0) et broadcast (.255)" do
+      Beryl::CLI::VrackIp.invalid_host_ip?("192.168.42.0").should be_true
+      Beryl::CLI::VrackIp.invalid_host_ip?("192.168.42.255").should be_true
+      Beryl::CLI::VrackIp.invalid_host_ip?("192.168.42.42").should be_false
+    end
+  end
+
+  describe ".drift" do
+    it "repère valeur divergente, manque côté host, manque au registre" do
+      registry = {"obi" => "192.168.42.11", "ke" => "192.168.42.12", "old" => "192.168.42.99"}
+      entries = [entry("obi", "192.168.42.11"), entry("ke", "192.168.42.13"), entry("new", "192.168.42.50")]
+      drifts = Beryl::CLI::VrackIp.drift(registry, entries)
+      by_host = drifts.to_h { |d| {d.host, d} }
+
+      by_host["obi"]?.should be_nil # identique → pas de dérive
+      by_host["ke"].kind.should eq(Beryl::CLI::VrackIp::DriftKind::Differs)
+      by_host["ke"].registry_ip.should eq("192.168.42.12")
+      by_host["ke"].host_ip.should eq("192.168.42.13")
+      by_host["old"].kind.should eq(Beryl::CLI::VrackIp::DriftKind::MissingOnHost)
+      by_host["new"].kind.should eq(Beryl::CLI::VrackIp::DriftKind::MissingInRegistry)
+    end
+
+    it "vide si registre et hosts concordent" do
+      registry = {"a" => "192.168.42.1"}
+      Beryl::CLI::VrackIp.drift(registry, [entry("a", "192.168.42.1")]).should be_empty
+    end
+  end
+
   describe ".render / .parse_registry" do
     it "génère un vrack.yml trié par IP, relisible" do
       yaml = Beryl::CLI::VrackIp.render("pn-1049829", "192.168.42.0/24",
@@ -71,6 +100,20 @@ describe Beryl::CLI::VrackIp do
       reg = Beryl::CLI::VrackIp.parse_registry(yaml)
       reg["zgra"].should eq("192.168.42.1")
       reg["obi"].should eq("192.168.42.41")
+    end
+
+    it "survit au problème norvégien : le host `no` fait un aller-retour" do
+      yaml = Beryl::CLI::VrackIp.render("pn-1", "192.168.42.0/24",
+        [entry("no", "192.168.42.22"), entry("zgra", "192.168.42.1")])
+      yaml.should contain(%("no": 192.168.42.22)) # quoté à l'écriture
+      reg = Beryl::CLI::VrackIp.parse_registry(yaml)
+      reg["no"].should eq("192.168.42.22") # relu comme chaîne, pas false
+    end
+
+    it "une clé non quotée `no` (legacy) n'efface pas tout le reste" do
+      legacy = "hosts:\n  no: 192.168.42.22\n  zgra: 192.168.42.1\n"
+      reg = Beryl::CLI::VrackIp.parse_registry(legacy)
+      reg["zgra"].should eq("192.168.42.1") # les autres survivent
     end
   end
 end
