@@ -280,27 +280,30 @@ module Beryl::CLI::Scan
       key = host.identity_file || "(aucune, résolution échouera)"
       log "5.1 connexion SSH à #{Beryl.format_ssh_target(host)} (user=#{conn.user}, port=#{conn.port}, key=#{key})..."
       disks = read_disks(conn)
+      unless disks.empty?
+        STDERR.puts
+        STDERR.puts "Disques détectés sur #{host.fqdn} :"
+        STDERR.puts disks_table(disks)
+        if (warning = disk_inventory_warning_for(host, effective_provider, disks))
+          STDERR.puts
+          STDERR.puts warning
+        end
+        STDERR.puts
+      end
+
+      # RAID matériel : proposer (option 2/3) de (re)configurer la carte —
+      # MÊME quand l'OS ne présente AUCUN disque (disques en « Unconfigured
+      # Good » après une reconfig interrompue → un VD ou un JBOD les
+      # réexpose). Reconfig + reboot auto → re-scan → `disks` reflète le
+      # nouveau layout. Refus du reboot auto → nil → arrêt (reboot manuel).
+      reconfigured = maybe_reconfigure_raid(conn, host, disks, non_interactive)
+      return EXIT_OK unless reconfigured
+      disks = reconfigured
+
       if disks.empty?
         STDERR.puts "beryl : aucun disque physique détecté sur #{host.fqdn}"
         return EXIT_NO_DISKS
       end
-      STDERR.puts
-      STDERR.puts "Disques détectés sur #{host.fqdn} :"
-      STDERR.puts disks_table(disks)
-      if (warning = disk_inventory_warning_for(host, effective_provider, disks))
-        STDERR.puts
-        STDERR.puts warning
-      end
-      STDERR.puts
-
-      # RAID matériel : proposer (option 2/3) de reconstruire la carte.
-      # Si l'opérateur reconstruit + accepte le reboot auto, beryl reboote
-      # le rescue, attend son retour et re-scanne → `disks` reflète le
-      # nouveau layout (JBOD ou nouveau volume). Refus du reboot auto → nil
-      # → on s'arrête (reboot manuel requis).
-      reconfigured = maybe_reconfigure_raid(conn, host, disks, non_interactive)
-      return EXIT_OK unless reconfigured
-      disks = reconfigured
     end
 
     # `dns_short` est le nom court retenu par l'étape DNS (flag ou prompt) ;
@@ -624,36 +627,48 @@ module Beryl::CLI::Scan
     end
 
     STDERR.puts
+    if disks.empty?
+      STDERR.puts "Contrôleur RAID présent, mais l'OS ne voit AUCUN disque"
+      STDERR.puts "(disques probablement en « Unconfigured Good » après une reconfig interrompue —"
+      STDERR.puts " un JBOD ou un nouveau volume va les réexposer)."
+    end
     STDERR.puts "Contrôleur RAID matériel présent. Que faire des disques ?"
-    STDERR.puts "  1) Utiliser tels quels (ce que l'OS voit ci-dessus)"
+    STDERR.puts "  1) Utiliser tels quels (ce que l'OS voit ci-dessus)" unless disks.empty?
     STDERR.puts "  2) (Re)configurer en JBOD → ZFS gère le RAID"
     STDERR.puts "  3) (Re)créer un volume RAID matériel à un niveau choisi"
-    case ask("Choix [1/2/3] (défaut 1) : ", default: "1").strip
+    default = disks.empty? ? "2" : "1"
+    case ask("Choix [1/2/3] (défaut #{default}) : ", default: default).strip
     when "2"
-      reconfigure_raid(conn, url) { |cid| RaidController.to_jbod!(conn, cid) }
+      cid = prepare_storcli(conn, url)
+      Beryl::CLI::RaidController.to_jbod!(conn, cid)
       after_raid_reconfig(conn, "JBOD (disques bruts pour ZFS)")
     when "3"
-      level = ask_until_valid("Niveau RAID matériel (0|1|5|6|10) pour #{disks.size} disque(s) : ", default: "10") do |a|
+      cid = prepare_storcli(conn, url)
+      # Nombre de disques = ce que voit le CONTRÔLEUR (storcli), pas l'OS :
+      # robuste qu'on parte d'un volume (1 disque OS), du JBOD (N) ou de rien.
+      slots = Beryl::CLI::RaidController.drive_slots(conn, cid)
+      raise "aucun disque physique listé par storcli (/c#{cid}/eall/sall show)" if slots.empty?
+      level = ask_until_valid("Niveau RAID matériel (0|1|5|6|10) pour #{slots.size} disque(s) : ", default: "10") do |a|
         n = validate_raid!(a)
         raise ArgumentError.new("le contrôleur ne gère pas RAID #{n} (matériel : 0, 1, 5, 6, 10)") unless [0, 1, 5, 6, 10].includes?(n)
-        Beryl::CLI::RaidController.validate_drive_count!(n, disks.size)
+        Beryl::CLI::RaidController.validate_drive_count!(n, slots.size)
         n
       end
-      reconfigure_raid(conn, url) { |cid| RaidController.recreate!(conn, cid, level) }
+      Beryl::CLI::RaidController.recreate_on!(conn, cid, slots, level)
       after_raid_reconfig(conn, "nouveau volume RAID#{level}")
     else
-      disks # option 1 : volume tel quel, le scan continue avec ces disques
+      disks # option 1 : tels quels, le scan continue avec ces disques
     end
   end
 
-  # Récupère storcli, résout le contrôleur, exécute le bloc destructif.
-  private def self.reconfigure_raid(conn : SSH::Connection, url : String, &)
+  # Récupère storcli dans le rescue + résout le contrôleur. Lève si KO.
+  private def self.prepare_storcli(conn : SSH::Connection, url : String) : Int32
     STDERR.puts "  → récupération de storcli dans le rescue…"
     raise "téléchargement/exécution de storcli a échoué (storcli_url correct ? rescue avec curl ?)" unless Beryl::CLI::RaidController.fetch(conn, url)
     cid = Beryl::CLI::RaidController.controller_id(conn)
     raise "aucun contrôleur RAID vu par storcli" unless cid
-    STDERR.puts "  → reconfiguration du contrôleur /c#{cid} (destructif)…"
-    yield cid
+    STDERR.puts "  → contrôleur /c#{cid} (opération destructive)…"
+    cid
   end
 
   # Après reconfig : propose le reboot AUTO du rescue (le netboot OVH reste

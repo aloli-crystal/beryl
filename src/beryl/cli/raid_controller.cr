@@ -120,12 +120,18 @@ module Beryl::CLI
       storcli(conn, "/c#{cid} set jbod=on", must_succeed: true)
     end
 
-    # Recrée un volume matériel à `raid_num` sur tous les disques physiques.
-    # Séquence robuste depuis N'IMPORTE QUEL état (JBOD ou volume existant) :
-    # delete VD → JBOD off → forcer « Unconfigured Good » → add vd. Sans la
-    # remise en « good », storcli répond « resources already in use ».
-    def self.recreate!(conn : SSH::Connection, cid : Int32, raid_num : Int32) : Nil
-      slots = parse_drive_slots(storcli(conn, "/c#{cid}/eall/sall show").stdout)
+    # Slots des disques physiques vus par le CONTRÔLEUR (storcli), quel que
+    # soit ce que l'OS présente (volume = 1 disque OS, JBOD = N, « good » = 0).
+    # → permet de valider le niveau RAID sur le VRAI nombre de disques.
+    def self.drive_slots(conn : SSH::Connection, cid : Int32) : Array(String)
+      parse_drive_slots(storcli(conn, "/c#{cid}/eall/sall show").stdout)
+    end
+
+    # Recrée un volume matériel à `raid_num` sur les `slots` fournis (comptés
+    # en amont par `drive_slots`). Séquence robuste depuis N'IMPORTE QUEL état
+    # (JBOD, volume, ou « Unconfigured Good ») : delete VD → JBOD off → forcer
+    # « good » → add vd. Sans la remise en « good » : « resources already in use ».
+    def self.recreate_on!(conn : SSH::Connection, cid : Int32, slots : Array(String), raid_num : Int32) : Nil
       raise "aucun disque physique listé par storcli (/c#{cid}/eall/sall show)" if slots.empty?
       validate_drive_count!(raid_num, slots.size)
       storcli(conn, "/c#{cid}/vall delete force")        # supprime les VD (tolérant)
