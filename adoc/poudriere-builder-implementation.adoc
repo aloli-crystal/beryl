@@ -125,6 +125,52 @@ paquets `quimeo` vit dans un fichier poudriere (`bulk -f pkglist`)
 | 8 | Cron de rebuild + supervision.
 |===
 
+== 8bis. Récupération des ports EOL — overlay `quimeo-ports` (avancement 17 juin 2026)
+
+Builder `pkg` : poudriere OK (jail fbsd150amd64 15.0-p10, arbre `default`, clé de
+signature). Overlay `quimeo-ports` = dépôt git sur le builder
+(`/usr/local/poudriere/quimeo-ports`), enregistré : `poudriere ports -c -p quimeo
+-m null -M …`. Build : `poudriere bulk -j fbsd150amd64 -p default -O quimeo <port>`.
+
+**Archéologie git** : l'arbre `default` est un clone SUPERFICIEL (pas d'historique).
+`git fetch --unshallow` → HTTP 504 (serveur FreeBSD). Solution : clone séparé
+`--shallow-since=2023-01-01` depuis le **miroir GitHub** (`freebsd/freebsd-ports`,
+robuste) → `/usr/local/poudriere/ports-hist` (jetable, `rm -rf` à la fin).
+Récupération : `git checkout <commit-suppression>^ -- <chemin>` dans ports-hist puis copie.
+Commits de suppression : `lang/ruby27` = `6edd7f25f39` ; `security/openssl111` = `e6564f63212`.
+
+**Obstacles d'EOL rencontrés** :
+. **MOVED** : le tree de base tombstone les ports retirés → poudriere refuse.
+  Fix : retirer les 2 lignes du `MOVED` de base (`sed -i.bak -E
+  '/^(security\/openssl111|lang\/ruby27)\|/d'`). À re-faire après `ports -u`.
+. **Framework ssl** : `Mk/Uses/ssl.mk` a purgé openssl111 de ses providers (même
+  l'ancien ne l'avait plus) → on CONTOURNE : ruby27 dépend d'openssl111 en direct
+  (`LIB_DEPENDS+= libssl.so.11:security/openssl111` — SONAME **`.so.11`**, pas
+  `.1.1` ! cf. `OPENSSL_SHLIBVER=11` — + `CONFIGURE_ARGS+= --with-openssl-dir=${LOCALBASE}`),
+  `ssl` retiré du `USES`. (openssl111 en LOCALBASE : `/usr/local/include/openssl`, `…/lib`.)
+
+**Recette complète ruby27 → ✅ BÂTI `ruby27-2.7.8,1` (17 juin)** :
+. **ruby.mk de base** : ajouter le bloc 2.7 (`.if ${RUBY_VER} == 2.7` /
+  `RUBY_DISTVERSION= 2.7.8` / `.elif …== 3.3`) AVANT le bloc 3.3 (⚠️ le `.` des
+  conditionnels BSD make est INDENTÉ : `.      if`). + IGNORE message.
+. **Makefile du port** (dans l'overlay, persistant) : retirer `DISTNAME=
+  ${RUBY_DISTNAME}` et `WRKSRC= ${RUBY_WRKSRC}` (le framework moderne ne les
+  définit plus → vides → auto-dérivés en `ruby-2.7.8` / `${WRKDIR}/ruby-2.7.8`) ;
+  `LIB_DEPENDS+= libssl.so.11:…` ; `ssl` hors `USES` ; `CONFIGURE_ARGS+= --with-openssl-dir`.
+. **distinfo** : régénérer pour 2.7.8 (`make makesum` dans une copie temporaire
+  posée dans l'arbre de base, le temps d'avoir le `Mk/`).
+. **pkg-plist** : `man/man1/` → `share/man/man1/` (FreeBSD 13→15 a déplacé les man).
+. La compilation passe SANS patch qsort (le `patch-util.c` de 2023 suffit / non concerné).
+
+⚠️ **FRAGILITÉ** : les edits du **tree de BASE** (`MOVED`, `Mk/Uses/ruby.mk`) sont
+**écrasés par `poudriere ports -u`** → à RÉ-APPLIQUER après chaque MAJ (prévoir un
+script `quimeo-ports/reapply-base-patches.sh`). Les edits du **port** (overlay
+`quimeo-ports`) sont persistants. Overlay à committer en git + pousser.
+
+**Reste** : `nginx [PASSENGER]`, `chruby`, gems. Le paquet `ruby27` s'installe en
+**/usr/local** (`/usr/local/bin/ruby27`), géré par pkg (remplace ruby-install/chruby
+de [[freebsd15-ruby-2.7.8-install]]). Cleanup : `rm -rf /usr/local/poudriere/ports-hist`.
+
 == 9. Hors périmètre / chantiers liés
 
 * **Chiffrement zroot** (obi/wan/ben) + **z = serveurs Tang/déchiffrement** via

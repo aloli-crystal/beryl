@@ -1,0 +1,253 @@
+= Configuration réseau beryl — section `network:` (séparation réseau / applications)
+:toc: left
+:icons: font
+:status: SPEC — à valider avant implémentation (16 juin 2026)
+
+[abstract]
+Sépare la **configuration réseau interne** d'un serveur (interface vRack, accès
+par bastion, fermeture du SSH public) des **recettes applicatives**. Le réseau
+vit dans une section `network:` du host.yml, gérée UNIQUEMENT par
+`beryl vrack <host>`. Les recettes (`apply_recipes`) ne s'occupent plus que des
+applications → on peut toutes les appliquer d'un coup, sans souci d'ordre ni de
+lockout réseau.
+
+== 1. Principe
+
+Aujourd'hui le réseau pollue `apply_recipes` (`vrack-interface`,
+`sshd-vrack-only`) et duplique des informations (IP vRack écrite dans la recette
+ET dans `ssh_host` ; bastion dans `proxy_jump` ET dans un champ `bastion`).
+
+Décision : **le réseau sort des recettes**. Une section `network:` top-level
+porte tout, une seule fois, gérée par une seule commande (`beryl vrack`).
+
+[cols="1,2"]
+|===
+| Couche | Contenu
+
+| `network:` (réseau) | IP(s) vRack, accès bastion (`proxy_jump`), état caché. Config INTERNE du serveur. Gérée par `beryl vrack`.
+| `apply_recipes` (applis) | clamav, mariadb, ruby, oh-my-zsh, durcissement sshd, pkg-repo… 100 % applicatif.
+|===
+
+== 2. La section `network:`
+
+[source,yaml]
+----
+network:
+  vrack_ip: 192.168.42.31              # scalaire OU liste (cf. §2.1) — posé À LA MAIN
+  proxy_jump: admin@zsbg.quimeo.net    # posé par `beryl vrack` ; présent ⇒ host CACHÉ (cf. §2.2)
+apply_recipes:                         # 100 % applicatif
+  - clamav
+  - mariadb
+  - oh-my-zsh: { user: deploy }
+  - pkg-repo-quimeo
+----
+
+NOTE: `vrack_ip` se met à la main ; `proxy_jump`/`bastion` sont posés par
+`beryl vrack <host>` (§4). On n'édite jamais `proxy_jump`/`bastion` à la main.
+
+=== 2.1 `vrack_ip` — scalaire ou liste
+
+Accepte les **deux** formes, normalisées en liste en interne :
+
+[source,yaml]
+----
+vrack_ip: 192.168.42.31                       # 1 IP
+vrack_ip: [192.168.42.31]                      # idem (liste à 1 élément)
+vrack_ip: [192.168.42.31, 192.168.42.131]      # plusieurs IP (multi-homing / rotation)
+----
+
+* `netif` pose **toutes** les IP de la liste : la **1ʳᵉ = primaire**, les
+  suivantes = **alias**.
+* **`ssh_host` = la 1ʳᵉ IP de la liste** (celle par laquelle beryl entre quand
+  le host est caché). Calculé, jamais écrit.
+
+=== 2.2 `proxy_jump` — l'accès par bastion (et l'état « caché »)
+
+`<user>@<bastion>` : porte **qui** fait le transfert ET **par quel** bastion.
+Le bastion est court (→ `.<domaine>` ajouté) ou FQDN.
+
+* **Présent ⇒ host CACHÉ** : beryl ferme le 22 public (pf) en phase réseau, et
+  joint le host par `proxy_jump` → `ssh_host` (1ʳᵉ `vrack_ip`).
+* **Absent ⇒ host public** : connexion directe (FQDN/nom hébergeur), pas de pf.
+
+(Décision §7 : l'état caché est IMPLICITE via la présence de `proxy_jump`, pas
+de champ `hidden:` séparé. ACTÉ.)
+
+=== 2.3 `network.bastion` — rôle du host
+
+Booléen, posé par `beryl vrack` (jamais à la main) :
+
+* `network.bastion: true`  → ce host EST un bastion (z). Sert à **lister** les
+  bastions disponibles dans le chooser. Un bastion n'a pas de `proxy_jump`.
+* `network.bastion: false` → ce host n'a PAS de bastion (public assumé, ex.
+  builder pkg). Évite qu'on repose la question.
+* (ni l'un ni l'autre, mais `proxy_jump` présent) → host caché qui passe par le
+  bastion de `proxy_jump`.
+
+== 3. Partage des rôles : `beryl vrack` (réseau) vs `beryl apply` (applis)
+
+* **`beryl vrack <host>`** fait TOUT le réseau, **sur le serveur** : monte
+  `vrack_ip` (netif, persistant), pose le rôle bastion, et **ferme le 22** si
+  caché (pf). C'est la commande du cycle de vie réseau.
+* **`beryl apply <host>`** ne fait QUE les **recettes (applis)**. Aucune action
+  réseau. Il se contente de **lire `network:` pour SE CONNECTER** (ssh_host /
+  proxy_jump dérivés, cf. §3.1), en supposant le réseau déjà posé par
+  `beryl vrack`.
+
+→ Recettes 100 % applicatives → on les applique toutes d'un coup.
+
+=== 3.1 Connexion dérivée de `network:` (commune à apply et vrack)
+
+* `proxy_jump` présent → `ssh_host` = `vrack_ip[0]` (IP vRack), saut par
+  `proxy_jump`. Sinon → FQDN/nom hébergeur, connexion directe.
+* Jamais écrits : `ssh_host` est calculé.
+
+== 4. Le chemin canonique (workflow)
+
+[source]
+----
+1. beryl bootstrap <host>        → FreeBSD installé, host dans le vRack (OVH), SSH public
+2. host.yml (à la main) :
+     network:
+       vrack_ip: 192.168.42.31   → on déclare l'IP vRack voulue
+3. beryl vrack <host>            → monte l'IP vRack sur l'interface (netif), puis CHOOSER :
+     • ce host peut être un bastion ?  → network.bastion: true   (fini : bastion public)
+     • sinon, passer par un bastion ?
+         - NON → network.bastion: false                          (fini : public assumé)
+         - OUI → choix du bastion + VÉRIF → ferme le 22 (pf)
+                 + network.proxy_jump: <user>@<bastion>.<fqdn>    (fini : caché)
+4. beryl apply <host>            → recettes (applis), joignable via network:
+----
+
+`beryl vrack` enchaîne les transitions de connexion en sécurité : il monte l'IP
+en **public**, puis (cas caché) re-bascule **par le bastion** avant de fermer le
+22 → la session n'est jamais coupée (anti-lockout intégré).
+
+Plus tard, **changer l'IP** = ajouter la nouvelle en 2ᵉ dans `vrack_ip` puis
+re-lancer `beryl vrack <host>` : il détecte les 2 IP et propose la rotation
+(§5.2). `beryl vrack` est idempotent — on peut le relancer sans risque.
+
+== 5. `beryl vrack <host>` — détail
+
+Monte `vrack_ip` (netif, idempotent) puis le chooser. Interactif (TTY),
+**vérification de joignabilité avant d'écrire `proxy_jump` et de fermer le 22**.
+
+=== 5.1 Rôle / accès (chooser)
+
+[source]
+----
+beryl vrack <host>
+  Rôle réseau de <host> :
+    1) ce host EST un bastion       → network.bastion: true
+    2) joindre via un bastion       → demande bastion (liste des network.bastion:true)
+                                      + user (défaut = user de connexion, admin)
+                                      + VÉRIFIE ssh <user>@bastion → vrack_ip[0] → uname
+                                      → si OK : écrit network.proxy_jump: <user>@<bastion>
+                                      → si KO : refuse + explique (vrack_ip pas montée ? bastion KO ?)
+    3) pas de bastion (public)      → network.bastion: false (retire proxy_jump)
+    0) ne rien changer
+----
+
+=== 5.2 Changement d'IP — détecté par `beryl vrack` (idempotent)
+
+PAS de sous-commande dédiée. `beryl vrack <host>` est **idempotent** : s'il
+trouve **plusieurs IP** dans `vrack_ip`, il **propose de finaliser la rotation**
+— même esprit que `beryl rotate-key` (paire `[active, suivante]`, reprise
+idempotente).
+
+Pour changer d'IP, on ajoute la **nouvelle en SECOND**, à la main :
+[source,yaml]
+----
+network:
+  vrack_ip: [192.168.42.31, 192.168.42.131]   # [ancienne, nouvelle]
+----
+
+Puis on (re)lance `beryl vrack <host>` :
+[source]
+----
+1. monte les DEUX IP (netif) : .31 primaire, .131 en alias → les deux vivantes
+2. détecte 2 IP → PROPOSE : « migrer vers 192.168.42.131 (retirer .31) ? »
+3. si oui : VÉRIFIE .131 joignable (par le bastion si caché)
+   → re-bascule la connexion sur .131 → retire .31
+   → network.vrack_ip: 192.168.42.131   (rebascule en scalaire)
+----
+
+* On ne retire JAMAIS la première avant d'avoir **prouvé** la seconde (le filet
+  de la danse manuelle de bi). Session sur la nouvelle → jamais coupée.
+* **Idempotent** : interrompu, on relance `beryl vrack` → il reprend (2 IP
+  encore là) ou constate que c'est fini (1 seule). Met à jour `vrack.yml`.
+
+== 6. Garde-fous
+
+* `network:` n'est jamais édité à la main (sinon risque de lockout, cf.
+  l'incident obi/wan). `beryl vrack` est la porte unique.
+* Toute pose de `proxy_jump` / tout `change-ip` est **précédé d'un test SSH réel**
+  par le chemin cible. Échec → on n'écrit rien.
+* `vrack-ip --check` reste le validateur global (collisions, dérive,
+  hors-réseau) sur l'ensemble des `network.vrack_ip`.
+
+== 7. Décisions
+
+[cols="1,2,1"]
+|===
+| Sujet | Choix proposé | Statut
+
+| Nom de la section | **`network:`** | ACTÉ
+| `vrack_ip` | **scalaire OU liste** (normalisé liste), posé **à la main** | ACTÉ
+| Rôle de `beryl vrack` | gère **tout le réseau** (monte l'IP + bastion + ferme le 22) ; `beryl apply` = applis only | ACTÉ
+| État caché | **implicite** (= `proxy_jump` présent ⇒ ferme le 22) | ACTÉ
+|===
+
+== 8. Migration
+
+. **Modèle de config** : parser `network:` (`vrack_ip` scalaire|liste,
+  `bastion` bool, `proxy_jump`). `ssh_host` dérive de `network.vrack_ip[0]` quand
+  `network.proxy_jump` présent. `bastion?` lit `network.bastion == true`.
+. **`beryl vrack`** (idempotent) : monte `vrack_ip` (netif) + chooser de rôle
+  (§5.1) + fermeture du 22 (pf) si caché + détection multi-IP → rotation 2 passes
+  (§5.2), avec vérif et transitions de connexion sûres.
+. **`beryl apply`** : ne fait QUE les recettes ; lit `network:` pour se
+  connecter (ssh_host/proxy_jump dérivés). Aucune action réseau.
+. **Recettes** : retirer `vrack-interface` et `sshd-vrack-only` de la flotte
+  (absorbées dans la phase réseau). Les recettes deviennent 100 % applicatives.
+. **host.yml existants** : migrer `vrack-interface: { ip }` + `ssh_host:` +
+  `proxy_jump:` + `bastion: <nom>` → `network: { vrack_ip, proxy_jump }`.
+  Nettoyer bi/ben/obi/wan/ke + les z (`bastion: true`) + pkg.
+. **Tests** : modèle (`vrack_ip` scalaire/liste, dérivation ssh_host, états
+  caché/public), phases d'apply, `change-ip` (deux passes), chooser (parties
+  pures).
+
+== 9. Exemples de host.yml cible
+
+.Bastion (z)
+[source,yaml]
+----
+network:
+  vrack_ip: 192.168.42.3
+  bastion: true          # ce host EST un bastion (public, pas de proxy_jump)
+apply_recipes:
+  - unbound-vrack        # applicatif (DNS interne)
+----
+
+.App server caché
+[source,yaml]
+----
+network:
+  vrack_ip: 192.168.42.31
+  proxy_jump: admin@zsbg.quimeo.net
+apply_recipes:
+  - clamav
+  - mariadb
+  - oh-my-zsh: { user: deploy }
+  - pkg-repo-quimeo
+----
+
+.Builder public (pkg)
+[source,yaml]
+----
+network:
+  vrack_ip: 192.168.42.4   # sur le vRack mais PAS caché
+  bastion: false           # public assumé (décidé via `beryl vrack`)
+apply_recipes:
+  - poudriere-nginx
+----

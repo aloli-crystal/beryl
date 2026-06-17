@@ -1,0 +1,196 @@
+= Paquets ruby + nginx-quimeo — Architecture de packaging
+:toc: left
+:icons: font
+:status: SPEC FIGÉE — 17 juin 2026, prête à implémenter
+
+[abstract]
+Comment empaqueter, dans le dépôt poudriere `quimeo` (cf.
+`poudriere-builder-implementation.adoc`), l'**nginx + Passenger** et les
+**rubies** qui font tourner les applications, de façon à **monter en version
+sans casse** (nginx d'un côté, ruby de l'app de l'autre) et à **anticiper la
+migration** `2.7 → 3.x → 4.0`. Décision : **un `nginx-quimeo` agnostique au
+ruby** + des **rubies suffixés interchangeables**, le choix se faisant à
+`passenger_ruby` au runtime.
+
+== 0. Décisions actées
+
+[cols="1,3"]
+|===
+| Décision | Choix
+
+| Modèle de packaging | **`nginx-quimeo` agnostique au ruby** + **rubies suffixés** (`ruby27`, `ruby30`…). PAS un nginx par version de ruby.
+| Sélection du ruby de l'app | **`passenger_ruby`** dans la conf nginx (runtime), PAS dans le nom du paquet.
+| Options de `nginx-quimeo` | **Gelées** : `PASSENGER` + `HEADERS_MORE`, plus les défauts de `www/nginx`. Rien d'autre.
+| Nom de paquet nginx | **Distinct** (`nginx-quimeo`), `CONFLICTS` avec l'officiel `nginx` → un seul nginx par serveur, zéro collision de priorité.
+| Versions de ruby | Paquets **suffixés** qui coexistent : `ruby27` (overlay EOL), `ruby33`/`ruby34` (officiels), `ruby30`/`ruby31`/`ruby32` (overlay EOL, **au besoin**).
+| Passenger natif par ruby | **NON** (rejeté — cf. §8). On accepte `native_support` dégradé pour le ruby de l'app (coût marginal).
+| Montée nginx/passenger | Via **`pkg upgrade`** (versions de l'arbre des ports FreeBSD, maintenu quasi-à-jour). Fini le `passenger-install-nginx-module` manuel.
+| Montée du ruby de l'app | `pkg delete ruby27 && pkg install ruby30` + repointer `passenger_ruby`, **sans toucher `nginx-quimeo`**.
+|===
+
+== 1. Le principe : découpler nginx et le ruby de l'app
+
+Dans l'ancien flux (`/opt/ruby-2.7.8--passenger-6.1.5`), `passenger-install-nginx-module`
+téléchargeait le nginx **fourni avec** passenger → nginx **soudé** à un couple
+`(ruby, passenger)`. En pkg/ports, deux choses changent :
+
+* **nginx et passenger viennent de l'arbre des ports** (maintenu quasi-à-jour) →
+  `pkg upgrade` donne un nginx récent **automatiquement**.
+* **`passenger_ruby` choisit le ruby de l'app au runtime** → un **même**
+  `nginx-quimeo` sert une app 2.7, 3.3 ou 3.4.
+
+[IMPORTANT]
+====
+Conséquence directe : **le nom du paquet nginx NE porte PAS la version de ruby.**
+La dissociation se fait à `passenger_ruby`, pas dans le nom. Un seul `nginx-quimeo`
+pour toutes les lignes de ruby.
+====
+
+== 2. `nginx-quimeo` (port custom, overlay `quimeo-ports`)
+
+Port `www/nginx-quimeo` dérivé de `www/nginx` :
+
+* `PKGNAMESUFFIX= -quimeo` → paquet **`nginx-quimeo`**.
+* `OPTIONS_SET` **gelé** dans le port : `PASSENGER HEADERS_MORE` (+ défauts nginx).
+* `CONFLICTS_INSTALL= nginx nginx-devel nginx-full` → un seul nginx par serveur.
+* `PORTVERSION` = la version du nginx de l'arbre (ex. `1.30.2`) → **monte avec `pkg upgrade`**.
+* Bâti avec le **ruby par défaut** de l'arbre (ex. `ruby34`) → dépend de ce ruby
+  au runtime (ruby **interne** de passenger, voir §5).
+
+[NOTE]
+====
+On ne fige PAS les options via le `make.conf` global du builder (`OPTIONS_SET+=`),
+car ça toucherait tout port définissant `PASSENGER`/`HEADERS_MORE`. On les fige
+**dans le port** `nginx-quimeo` lui-même → reproductible, explicite, sans effet de
+bord. (Le `make.conf` global n'était qu'un échafaudage de prototypage.)
+====
+
+== 3. Les rubies (paquets suffixés)
+
+Chaque version = un paquet **distinct**, qui coexistent :
+
+[cols="1,1,2"]
+|===
+| Paquet | Version | Provenance
+
+| `ruby27` | 2.7.8 | **overlay** `quimeo-ports` (EOL récupéré — cf. builder §8bis)
+| `ruby30` | 3.0.x | overlay (EOL) — **au besoin** pour la migration
+| `ruby31` | 3.1.x | overlay (EOL) — **au besoin**
+| `ruby32` | 3.2.x | overlay (EOL) — **au besoin**
+| `ruby33` | 3.3.x | **officiel** (arbre des ports)
+| `ruby34` | 3.4.x | **officiel** (arbre des ports)
+|===
+
+[TIP]
+====
+La migration n'est **pas forcément incrémentale** : une app saute souvent
+`2.7 → 3.3` directement (avec des correctifs de code). On ne récupère `ruby30`/
+`ruby31`/`ruby32` (EOL, archéologie git comme `ruby27`) **que si** le plan de
+migration passe réellement par eux.
+====
+
+== 4. Sur un serveur applicatif
+
+Installation (depuis le dépôt `quimeo`, priorité 10) :
+
+[source,sh]
+----
+pkg install nginx-quimeo ruby27
+----
+
+Conf nginx (`nginx.conf`) — pointer passenger sur le ruby de l'app + cacher l'en-tête :
+
+[source,nginx]
+----
+passenger_ruby /usr/local/bin/ruby27;
+more_clear_headers Server;
+server_tokens off;
+----
+
+Cycle de vie de l'app : géré par Passenger (directives `passenger_*` + redémarrage
+par `touch tmp/restart.txt`, fiable sans outil CLI).
+
+== 5. Les deux rubies (à assumer)
+
+[cols="1,2"]
+|===
+| Ruby sur l'app server | Rôle
+
+| `ruby34` (tiré par `nginx-quimeo`) | ruby **interne** de Passenger — **dormant** (le PassengerAgent est en C++, ce ruby ne sert pas le trafic) ; ne bouge jamais.
+| `ruby27` (installé explicitement) | ruby de **l'application** — sert les requêtes ; **interchangeable** (→ `ruby30`…).
+|===
+
+[NOTE]
+====
+**Coût « 2 rubies » = disque, pas runtime.** Un seul ruby exécute des requêtes
+(celui de l'app). Le ruby interne de passenger reste dormant.
+
+**`native_support` dégradé** : Passenger n'a pas son extension native précompilée
+pour le ruby de l'app → avertissement au démarrage + perte de perf **marginale**
+(joue sur le *spawn* de process, pas sur le service des requêtes). L'app tourne à
+l'identique. S'il y a un compilo sur le serveur, Passenger la compile **une fois**.
+====
+
+== 6. Sémantique des montées de version
+
+[cols="1,3"]
+|===
+| Action | Effet
+
+| `pkg upgrade` | Monte **nginx + passenger** (`nginx-quimeo`) aux versions de l'arbre — **indépendamment du ruby de l'app**.
+| Patch ruby (2.7.8 → 2.7.x) | `pkg upgrade ruby27` — indépendant de nginx.
+| Migrer le ruby de l'app | `pkg delete ruby27 && pkg install ruby30`, puis `passenger_ruby /usr/local/bin/ruby30`, `bundle install`, recharger nginx. **`nginx-quimeo` intact.**
+| Pas de collision | `ruby27`/`ruby30` (noms distincts) ne heurtent jamais le `ruby` officiel 3.x ; `nginx-quimeo` (`CONFLICTS`) ne heurte jamais l'`nginx` officiel.
+|===
+
+== 7. Chemin de migration `2.7 → 3.x → 4.0`
+
+. **Aujourd'hui** : `nginx-quimeo` + `ruby27`, `passenger_ruby …/ruby27`.
+. **Cibler 3.x** : bâtir/activer `ruby33` (officiel) au dépôt. Sur **un** serveur
+  de test : `pkg install ruby33`, `passenger_ruby …/ruby33`, corriger le code,
+  `bundle install`, valider.
+. **Basculer** : sur les app servers, `pkg delete ruby27 && pkg install ruby33`,
+  repointer `passenger_ruby`, recharger. Réversible (réinstaller `ruby27`).
+. **… jusqu'à 4.0** : même geste, ligne par ligne. `nginx-quimeo` ne bouge pas.
+
+== 8. Alternative écartée — Passenger natif par ruby (poudriere *sets*)
+
+Pour un `native_support` **précompilé** par ruby, il faudrait un **sous-dépôt par
+ligne de ruby** (poudriere *sets* : `quimeo-ruby27`, `quimeo-ruby33`…), chacun
+bâti avec son ruby **par défaut** → son `ruby` (générique) + son `nginx`
+passenger-natif.
+
+* **Avantage** : zéro dégradation `native_support`.
+* **Coûts** : **N dépôts** à signer/servir/maintenir ; noms de paquets génériques
+  (le tag est le **sous-dépôt**) ; migration = basculer le serveur d'un sous-dépôt
+  à l'autre.
+
+**Rejeté** : le gain (perf marginale du *spawn*) ne justifie pas la complexité
+opérationnelle. À **reconsidérer** seulement si un profilage montre que le *spawn*
+devient un goulot réel.
+
+== 9. Points ouverts
+
+* **Choix du serveur d'app (Passenger vs Puma…) — HORS présente spec.** C'est une
+  décision de l'**évolution de l'application**, pas du packaging, et elle se tranche
+  par **benchmark** — pas par opinion. Mesurer sous charge réaliste : latence p95,
+  req/s, RAM par process, temps de *spawn*, à ruby cible égal. **Sans impact** sur
+  `nginx-quimeo` : il resterait le front HTTP (TLS, `headers_more`, statique) ; seul
+  le backend changerait (Passenger intégré → Puma derrière un `proxy_pass`). Le
+  benchmark sera défini au moment de la migration.
+* **Outils CLI passenger** (`passenger-status`, `passenger-config`) : vérifier
+  s'ils sont fournis par le port `nginx-quimeo` ou s'il faut `rubygem-passenger`
+  à part (le `touch restart.txt` suffit pour le cycle de vie de base).
+* **Récupération EOL `ruby30/31/32`** : à déclencher seulement si la migration y passe.
+
+== 10. Implémentation (prochaines étapes)
+
+. **Revert** du prototypage : retirer `DEFAULT_VERSIONS+=ruby=2.7` du `make.conf`
+  global du builder (garder `ruby27` suffixé) ; les options nginx iront dans le
+  port custom, pas le `make.conf`.
+. **Créer le port** `www/nginx-quimeo` dans l'overlay `quimeo-ports` (dérivé de
+  `www/nginx` : `PKGNAMESUFFIX`, `OPTIONS_SET` gelé, `CONFLICTS_INSTALL`).
+. **Bâtir** `nginx-quimeo` + `ruby27` (et `ruby33`/`ruby34` officiels au besoin).
+. **Recettes beryl** : `nginx-quimeo` (pkg-install + conf passenger/headers_more) ;
+  bascule des recettes qui parlaient de `nginx`/`ruby27`.
+. **Valider in vivo** : un app server installe `nginx-quimeo` + `ruby27`, sert l'app.
