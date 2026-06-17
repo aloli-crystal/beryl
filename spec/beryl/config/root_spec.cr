@@ -191,6 +191,24 @@ describe Beryl::Config::ResolvedHost do
     rh.proxy_jump.should eq("admin@bast.aloli.net")          # défaut = host.user (admin)
   end
 
+  it "network: vrack_ip (liste) + proxy_jump → host caché, ssh_host = 1ʳᵉ IP vRack" do
+    rh = Beryl::Config::Root.load(fixture("ssh-host-override")).resolve("netapp")
+    rh.vrack_ips.should eq(["192.168.42.31", "192.168.42.131"])
+    rh.vrack_ip.should eq("192.168.42.31")
+    rh.hidden?.should be_true
+    rh.proxy_jump.should eq("admin@zsbg.aloli.net") # chaîne complète, user inclus
+    rh.ssh_host.should eq("192.168.42.31")          # 1ʳᵉ IP vRack (caché)
+  end
+
+  it "network.bastion: true → bastion public (non caché, ssh_host = fqdn)" do
+    rh = Beryl::Config::Root.load(fixture("ssh-host-override")).resolve("netbast")
+    rh.bastion?.should be_true
+    rh.hidden?.should be_false
+    rh.vrack_ips.should eq(["192.168.42.3"]) # scalaire normalisé en liste
+    rh.ssh_host.should eq("netbast.aloli.net")
+    rh.ssh_host_is_provider_name?.should be_false
+  end
+
   it "passe `proxy_jump:` à ssh via un ProxyCommand vers le bastion vRack" do
     rh = Beryl::Config::Root.load(fixture("ssh-host-override")).resolve("clientvm")
     rh.proxy_jump.should eq("deploy@bastion.example.net")

@@ -509,7 +509,21 @@ module Beryl::Config
     #   - `true`         → CE host est un bastion (point d'entrée public du vRack).
     #   - `<nom>`        → host caché, joint VIA le bastion nommé (`bastion_name`).
     #   - `false`/absent → pas de bastion.
+    # Section `network:` (réseau interne, gérée par `beryl vrack`). Hash brut ou nil.
+    private def network_hash : Hash(YAML::Any, YAML::Any)?
+      @merged[YAML::Any.new("network")]?.try(&.as_h?)
+    end
+
+    private def network_field(key : String) : YAML::Any?
+      network_hash.try(&.[YAML::Any.new(key)]?)
+    end
+
+    # CE host est un bastion (point d'entrée public du vRack). Nouveau modèle :
+    # `network.bastion: true`. Fallback legacy : `bastion: true` top-level.
     def bastion? : Bool
+      if v = network_field("bastion")
+        return v.as_bool? == true
+      end
       @merged[YAML::Any.new("bastion")]?.try(&.as_bool?) == true
     end
 
@@ -523,6 +537,12 @@ module Beryl::Config
     # <nom>` est posé, on dérive `<user>@<nom>.<domaine>` (user du saut = celui
     # de la connexion). nil = connexion directe (cas par défaut).
     def proxy_jump(connect_user : String? = nil) : String?
+      # Nouveau modèle : `network.proxy_jump` (posé par `beryl vrack`), chaîne
+      # complète `<user>@<bastion.fqdn>` → le user du transfert est dedans.
+      if np = network_field("proxy_jump").try(&.as_s?)
+        return np
+      end
+      # Legacy : `proxy_jump:` top-level, puis dérivation depuis `bastion: <nom>`.
       if explicit = @merged[YAML::Any.new("proxy_jump")]?.try(&.as_s?)
         return explicit
       end
@@ -533,14 +553,53 @@ module Beryl::Config
       nil
     end
 
+    # Host CACHÉ (22 public fermé) — IMPLICITE : présence d'un `proxy_jump`
+    # (nouveau modèle) ou d'un `bastion: <nom>` (legacy, dérive proxy_jump).
+    # Un bastion (`network.bastion: true`) n'a pas de proxy_jump → non caché.
+    def hidden? : Bool
+      !proxy_jump.nil?
+    end
+
     # IP vRack du host, source de vérité du DNS interne (`beryl vrack-dns`).
     # Lue d'un champ explicite `vrack_ip:` ou, à défaut, des arguments de la
     # recette `vrack-interface` dans `apply_recipes:` (`{ ip: 192.168.42.x }`).
     # nil si le host n'est pas sur le vRack.
-    def vrack_ip : String?
-      if explicit = @merged[YAML::Any.new("vrack_ip")]?.try(&.as_s?)
-        return explicit
+    # IP(s) vRack normalisées en LISTE (1ʳᵉ = primaire, suivantes = alias /
+    # rotation). Source : `network.vrack_ip` (scalaire OU liste). Fallback
+    # legacy : `vrack_ip:` top-level puis recette `vrack-interface`.
+    def vrack_ips : Array(String)
+      if v = network_field("vrack_ip")
+        if s = v.as_s?
+          return [s]
+        elsif a = v.as_a?
+          return a.compact_map(&.as_s?)
+        end
       end
+      if explicit = @merged[YAML::Any.new("vrack_ip")]?.try(&.as_s?)
+        return [explicit]
+      end
+      if ip = legacy_vrack_interface_ip
+        return [ip]
+      end
+      [] of String
+    end
+
+    # 1ʳᵉ IP vRack (primaire), ou nil si le host n'est pas sur le vRack.
+    # Source de vérité du DNS interne (`beryl vrack-dns`) et de `ssh_host`
+    # quand le host est caché.
+    def vrack_ip : String?
+      vrack_ips.first?
+    end
+
+    # Vrai si l'IP est déjà déclarée DANS la section `network:` (par opposition
+    # au fallback legacy). Sert à `beryl vrack` pour ne consolider l'IP dans
+    # network: que si elle n'y est pas encore (et ne pas écraser une LISTE).
+    def network_declares_vrack_ip? : Bool
+      !network_field("vrack_ip").nil?
+    end
+
+    # Legacy : IP déclarée par la recette `vrack-interface` dans `apply_recipes`.
+    private def legacy_vrack_interface_ip : String?
       arr = @merged[YAML::Any.new("apply_recipes")]?.try(&.as_a?)
       return nil unless arr
       arr.each do |entry|
@@ -630,9 +689,9 @@ module Beryl::Config
       if explicit = @merged[YAML::Any.new("ssh_host")]?.try(&.as_s?)
         return explicit
       end
-      # Host caché derrière un bastion (`bastion: <nom>`) → on le joint par son
-      # IP vRack (le 22 public est fermé). Le ProxyJump passe par le bastion.
-      if bastion_name && (vip = vrack_ip)
+      # Host caché (proxy_jump présent) → on le joint par sa 1ʳᵉ IP vRack (le 22
+      # public est fermé). Le ProxyJump passe par le bastion.
+      if hidden? && (vip = vrack_ips.first?)
         return vip
       end
       if provider == "ovh" && (sn = ovh_service_name)
@@ -661,7 +720,7 @@ module Beryl::Config
     # provider.
     def ssh_host_is_provider_name? : Bool
       return false if ssh_host_explicit?
-      return false if bastion_name # vient du bastion (IP vRack), pas du provider
+      return false if hidden? # vient de l'IP vRack (host caché), pas du provider
       ssh_host != fqdn
     end
 

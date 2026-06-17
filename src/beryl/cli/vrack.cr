@@ -1,5 +1,6 @@
 require "option_parser"
 require "../providers/ovh"
+require "../apply"
 
 module Beryl::CLI
   # `beryl vrack <host> [--attach]` : interroge l'API OVH pour savoir si le
@@ -48,10 +49,6 @@ module Beryl::CLI
       host = root.resolve(parsed[:host], account_hint: account_hint, domain_hint: domain_hint)
       host.apply_all_credentials_to_env!
 
-      # Choix interactif du rôle bastion (écrit `bastion:` dans le host.yml).
-      # Pas en mode --attach (action OVH délibérée) ni hors terminal.
-      configure_bastion(root, host) if STDIN.tty? && !attach
-
       service = host.ovh_service_name
       unless service
         STDERR.puts "beryl : pas de `ovh.service_name` pour #{host.fqdn} (provider ovh ?)."
@@ -69,6 +66,7 @@ module Beryl::CLI
       current = provider.vrack_of_server(service)
       if current
         log "✅ #{service} est DÉJÀ dans le vRack #{current}."
+        finalize_network(root, host) unless attach
         warn_if_no_vrack_ip(host)
         return EXIT_OK
       end
@@ -133,35 +131,54 @@ module Beryl::CLI
       else
         short = host.fqdn.split('.').first
         STDERR.puts
-        STDERR.puts "⚠ #{host.fqdn} : rattaché au vRack côté OVH, mais le host.yml n'a PAS de"
-        STDERR.puts "  `vrack-interface` → pas d'IP privée tant qu'on ne l'ajoute pas. Dans"
+        STDERR.puts "⚠ #{host.fqdn} : rattaché au vRack côté OVH, mais le host.yml n'a PAS"
+        STDERR.puts "  d'IP vRack → pas d'IP privée tant qu'on ne la déclare pas. Dans"
         STDERR.puts "  #{short}.host.yml :"
-        STDERR.puts "      apply_recipes:"
-        STDERR.puts "        - vrack-interface: { ip: 192.168.42.N }"
-        STDERR.puts "  puis : beryl apply #{host.fqdn}"
+        STDERR.puts "      network:"
+        STDERR.puts "        vrack_ip: 192.168.42.N"
+        STDERR.puts "  puis : beryl vrack #{host.fqdn}"
       end
     end
 
-    # Chooser interactif du rôle bastion → écrit `bastion:` dans le host.yml.
-    private def self.configure_bastion(root : Beryl::Config::Root, host : Beryl::Config::ResolvedHost) : Nil
+    # Host confirmé dans le vRack : monte la 1ʳᵉ IP (netif) PUIS propose le
+    # chooser réseau (TTY). Best-effort sur le netif (logue, n'avorte pas).
+    private def self.finalize_network(root : Beryl::Config::Root, host : Beryl::Config::ResolvedHost) : Nil
+      if ip = host.vrack_ips.first?
+        mount_primary_vrack_ip(host)
+        # Consolide l'IP dans la section network: (depuis le legacy
+        # vrack-interface au besoin) → bloc network: complet. On NE touche
+        # PAS si network.vrack_ip est déjà déclaré (peut être une LISTE).
+        write_network(host, "vrack_ip", ip) unless host.network_declares_vrack_ip?
+      end
+      configure_network(root, host) if STDIN.tty?
+    end
+
+    # Chooser interactif du rôle RÉSEAU → écrit `network:` dans le host.yml.
+    private def self.configure_network(root : Beryl::Config::Root, host : Beryl::Config::ResolvedHost) : Nil
       return if host.virtual
       bastions = bastion_hosts(root)
       STDERR.puts
-      STDERR.puts "Rôle bastion de #{host.fqdn} (actuel : #{bastion_label(host)}) :"
-      STDERR.puts "  1) ce host EST un bastion          → bastion: true"
-      STDERR.puts "  2) joindre via un bastion existant → bastion: <nom>"
-      STDERR.puts "  3) pas de bastion                  → bastion: false"
+      STDERR.puts "Rôle réseau de #{host.fqdn} (actuel : #{network_label(host)}) :"
+      STDERR.puts "  1) ce host EST un bastion          → network.bastion: true"
+      STDERR.puts "  2) joindre via un bastion          → network.proxy_jump"
+      STDERR.puts "  3) pas de bastion (public)         → network.bastion: false"
       STDERR.puts "  0) ne rien changer"
       STDERR.print "Choix [0] : "
       case (STDIN.gets || "").strip
-      when "1" then write_bastion(host, "true")
-      when "3" then write_bastion(host, "false")
-      when "2" then choose_existing_bastion(host, bastions)
-      else          log "rôle bastion inchangé."
+      when "1"
+        write_network(host, "bastion", "true")
+        write_network_remove(host, "proxy_jump") # un bastion n'a pas de proxy_jump
+      when "3"
+        write_network(host, "bastion", "false")
+        write_network_remove(host, "proxy_jump")
+      when "2"
+        choose_via_bastion(host, bastions)
+      else
+        log "rôle réseau inchangé."
       end
     end
 
-    # Hosts marqués `bastion: true` (la liste des bastions), triés par nom.
+    # Hosts marqués bastion (`network.bastion: true` ou legacy), triés par nom.
     private def self.bastion_hosts(root : Beryl::Config::Root) : Array(Beryl::Config::ResolvedHost)
       root.all_hosts_by_fqdn.keys.compact_map do |fqdn|
         h = begin
@@ -173,44 +190,200 @@ module Beryl::CLI
       end.sort_by(&.fqdn)
     end
 
-    private def self.bastion_label(host : Beryl::Config::ResolvedHost) : String
-      return "EST un bastion (bastion: true)" if host.bastion?
-      if n = host.bastion_name
-        return "via #{n}"
+    private def self.network_label(host : Beryl::Config::ResolvedHost) : String
+      return "EST un bastion" if host.bastion?
+      if pj = host.proxy_jump(connect_user(host))
+        return "caché via #{pj}"
       end
-      "aucun"
+      "aucun / public"
     end
 
-    private def self.choose_existing_bastion(host : Beryl::Config::ResolvedHost, bastions : Array(Beryl::Config::ResolvedHost)) : Nil
+    private def self.choose_via_bastion(host : Beryl::Config::ResolvedHost, bastions : Array(Beryl::Config::ResolvedHost)) : Nil
       if bastions.empty?
-        log "aucun host marqué `bastion: true` — marquez-en un d'abord (choix 1 sur un z)."
+        log "aucun host `network.bastion: true` — marquez-en un d'abord (choix 1 sur un z)."
         return
       end
       STDERR.puts "  Bastions disponibles :"
       bastions.each_with_index { |b, i| STDERR.puts "    #{i + 1}) #{b.short_name}  (#{b.fqdn})" }
       STDERR.print "  Lequel ? : "
       sel = (STDIN.gets || "").strip.to_i?
-      if sel && (1..bastions.size).includes?(sel)
-        write_bastion(host, bastions[sel - 1].short_name)
-      else
+      unless sel && (1..bastions.size).includes?(sel)
         log "choix invalide — rien changé."
+        return
       end
+      bastion = bastions[sel - 1]
+      pj = derive_proxy_jump(connect_user(host), bastion.short_name, host.domain_name)
+      # Garde-fou §6 : on VÉRIFIE le chemin caché AVANT d'écrire proxy_jump.
+      log "vérification du chemin caché : ssh #{pj} → #{host.vrack_ips.first?} → uname…"
+      unless verify_via_bastion(host, pj)
+        log "✗ #{host.fqdn} injoignable par #{pj}. L'IP vRack est-elle montée et le bastion OK ?"
+        log "  proxy_jump NON écrit (rien changé)."
+        return
+      end
+      write_network(host, "proxy_jump", pj)
+      # Le 22 public reste OUVERT — la fermeture (pf) sera une passe dédiée,
+      # validée in-vivo (anti-lockout). Aucun risque de lockout ici.
+      log "✓ chemin vérifié — proxy_jump posé. (Fermeture du 22 = passe pf à venir ; 22 toujours ouvert.)"
     end
 
-    # Pose/maj la clé top-level `bastion:` dans le host.yml (préserve le reste).
-    private def self.write_bastion(host : Beryl::Config::ResolvedHost, value : String) : Nil
+    # Pose/maj `network.<key>: value` dans le host.yml (préserve le reste).
+    private def self.write_network(host : Beryl::Config::ResolvedHost, key : String, value : String) : Nil
       path = host.node.source_path
-      lines = File.read(path).split('\n')
-      line = "bastion: #{value}"
-      if idx = lines.index(&.starts_with?("bastion:"))
-        lines[idx] = line
-      elsif ar = lines.index(&.starts_with?("apply_recipes:"))
-        lines.insert(ar, line)
-      else
-        lines << line
+      File.write(path, upsert_network_field(File.read(path), key, value))
+      log "#{host.fqdn} : network.#{key}: #{value} (#{File.basename(path)})"
+    end
+
+    # Retire `network.<key>` du host.yml (no-op si absent).
+    private def self.write_network_remove(host : Beryl::Config::ResolvedHost, key : String) : Nil
+      path = host.node.source_path
+      before = File.read(path)
+      after = remove_network_field(before, key)
+      return if before == after
+      File.write(path, after)
+      log "#{host.fqdn} : network.#{key} retiré (#{File.basename(path)})"
+    end
+
+    # ─────────────────────────────────────────────────────────────
+    # Écriture du bloc `network:` du host.yml (fonctions PURES sur le
+    # contenu — testables sans SSH ni I/O). `beryl vrack` est la SEULE
+    # porte qui pose `network.proxy_jump`/`network.bastion` (spec §6).
+    # ─────────────────────────────────────────────────────────────
+
+    # Pose/maj `key: value` dans le bloc `network:` (indenté 2 espaces),
+    # en préservant le reste. Crée le bloc `network:` s'il est absent (avant
+    # `apply_recipes:` si présent, sinon en fin). Retourne le nouveau contenu.
+    def self.upsert_network_field(content : String, key : String, value : String) : String
+      lines = content.split('\n')
+      field = "  #{key}: #{value}"
+      if net = lines.index { |l| l.rstrip == "network:" }
+        i = net + 1
+        while i < lines.size && lines[i].starts_with?("  ")
+          if lines[i].lstrip.starts_with?("#{key}:")
+            lines[i] = field
+            return lines.join('\n')
+          end
+          i += 1
+        end
+        lines.insert(i, field) # fin du bloc network:
+        return lines.join('\n')
       end
-      File.write(path, lines.join('\n'))
-      log "#{host.fqdn} : #{line} (écrit dans #{File.basename(path)})"
+      if ar = lines.index { |l| l.starts_with?("apply_recipes:") }
+        lines.insert(ar, "network:")
+        lines.insert(ar + 1, field)
+      else
+        # Insérer AVANT d'éventuelles lignes vides finales (le `\n` terminal du
+        # fichier) pour ne pas créer de ligne blanche parasite.
+        pos = lines.size
+        while pos > 0 && lines[pos - 1].empty?
+          pos -= 1
+        end
+        lines.insert(pos, field)
+        lines.insert(pos, "network:")
+      end
+      lines.join('\n')
+    end
+
+    # Retire `key:` du bloc `network:` (et le bloc s'il devient vide).
+    # No-op si absent. Retourne le nouveau contenu.
+    def self.remove_network_field(content : String, key : String) : String
+      lines = content.split('\n')
+      net = lines.index { |l| l.rstrip == "network:" }
+      return content unless net
+      i = net + 1
+      while i < lines.size && lines[i].starts_with?("  ")
+        if lines[i].lstrip.starts_with?("#{key}:")
+          lines.delete_at(i)
+          # Bloc network: vide (plus d'enfant indenté juste après) → on le retire.
+          if net + 1 >= lines.size || !lines[net + 1].starts_with?("  ")
+            lines.delete_at(net)
+          end
+          return lines.join('\n')
+        end
+        i += 1
+      end
+      content
+    end
+
+    # ─────────────────────────────────────────────────────────────
+    # Orchestration serveur (SSH). PARTIES SÛRES seulement : monter l'IP
+    # (netif) et VÉRIFIER le chemin caché. AUCUNE fermeture du 22 ici → le
+    # lockout est impossible. La phase pf (fermeture du 22) viendra à part,
+    # avec validation in-vivo.
+    # ⚠ Ces helpers exécutent du SSH réel → à valider sur un host de test.
+    # ─────────────────────────────────────────────────────────────
+
+    # User de connexion SSH : le PREMIER user sudo-capable de `freebsd.users`
+    # (le SSH root est coupé sur les hôtes durcis), à défaut `host.user`.
+    # Aligné sur `beryl apply` (sinon on tenterait `root` → injoignable).
+    private def self.connect_user(host : Beryl::Config::ResolvedHost) : String
+      freebsd = host.merged[YAML::Any.new("freebsd")]?.try(&.as_h?)
+      if freebsd && (users = freebsd[YAML::Any.new("users")]?.try(&.as_a?))
+        users.each do |u|
+          uh = u.as_h?
+          next unless uh
+          name = uh[YAML::Any.new("name")]?.try(&.as_s?)
+          next unless name
+          wheel = uh[YAML::Any.new("groups")]?.try(&.as_a?).try(&.any? { |g| g.as_s? == "wheel" }) || false
+          sudo = uh[YAML::Any.new("sudo")]?.try(&.as_bool?) == true
+          return name if wheel || sudo
+        end
+      end
+      host.user
+    end
+
+    # Connexion sudo-capable vers le host (même logique que `beryl apply` :
+    # user sudo-capable, escalade SudoShell si non-root). nil si injoignable / sudo KO.
+    private def self.network_shell(host : Beryl::Config::ResolvedHost) : Beryl::Apply::Shell?
+      cu = connect_user(host)
+      conn = host.connection(cu)
+      uname = conn.exec("uname -s", raise_on_error: false).stdout.strip
+      unless uname == "FreeBSD"
+        log "✗ #{host.fqdn} injoignable ou pas FreeBSD (uname = #{uname.inspect})."
+        return nil
+      end
+      return Beryl::Apply::SshShell.new(conn) if cu == "root"
+      unless conn.exec("sudo -n true", raise_on_error: false).success?
+        log "✗ #{cu}@#{host.fqdn} ne peut pas sudo sans mot de passe."
+        return nil
+      end
+      Beryl::Apply::SudoShell.new(Beryl::Apply::SshShell.new(conn))
+    end
+
+    # Monte la 1ʳᵉ IP vRack sur l'interface (primitive `netif`, idempotente,
+    # persistante). SÛR : ajoute une IP, ne ferme rien. true si OK.
+    private def self.mount_primary_vrack_ip(host : Beryl::Config::ResolvedHost) : Bool
+      ip = host.vrack_ips.first?
+      return false unless ip
+      shell = network_shell(host)
+      return false unless shell
+      params = {"iface" => YAML::Any.new("auto"), "ip" => YAML::Any.new(ip)}
+      result = Beryl::Apply::Primitive["netif"]?.not_nil!.apply(
+        shell, params, false, Beryl::Apply::Context.new)
+      log "netif #{ip} : #{result.outcome} — #{result.message}"
+      !result.outcome.failed?
+    end
+
+    # Vérifie le chemin CACHÉ : `ssh <proxy_jump> → vrack_ip[0] → uname`.
+    # Lecture seule (aucune écriture). true si le host répond FreeBSD par le
+    # bastion. C'est le garde-fou avant d'écrire `proxy_jump` (spec §6).
+    private def self.verify_via_bastion(host : Beryl::Config::ResolvedHost, proxy_jump : String) : Bool
+      ip = host.vrack_ips.first?
+      return false unless ip
+      conn = SSH::Connection.new(
+        host: ip,
+        user: connect_user(host),
+        port: host.port,
+        identity_file: host.identity_file,
+        options: {"ProxyJump" => proxy_jump},
+      )
+      conn.exec("uname -s", raise_on_error: false).stdout.strip == "FreeBSD"
+    end
+
+    # Dérive la chaîne `proxy_jump` `<user>@<bastion-fqdn>` depuis le nom (court
+    # OU FQDN) du bastion et le domaine du host caché. Pur.
+    def self.derive_proxy_jump(connect_user : String, bastion : String, domain : String) : String
+      host = bastion.includes?('.') ? bastion : "#{bastion}.#{domain}"
+      "#{connect_user}@#{host}"
     end
 
     private def self.log(message : String) : Nil
