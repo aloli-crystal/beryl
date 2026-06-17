@@ -16,6 +16,11 @@ module Beryl::Apply
   # `parameters` (déclaration typée) / `arguments` (valeurs concrètes
   # d'une copie locale), et ses `steps`.
   class Recipe
+    # Clé d'argument RÉSERVÉE : reçoit la valeur POSITIONNELLE d'une entrée
+    # `apply_recipes` non-map (ex. `- pkg-add: [a, b]` ou `- pkg-add: htop`).
+    # L'Executor la re-mappe sur le paramètre déclaré `positional:`.
+    POSITIONAL_ARG = "__positional__"
+
     getter name : String
     getter description : String
     getter requires : Array(String)
@@ -23,6 +28,9 @@ module Beryl::Apply
     getter arguments : Hash(String, YAML::Any)
     getter steps : Array(Step)
     getter source_path : String
+    # Nom du paramètre qui reçoit la valeur positionnelle (forme concise
+    # `- recipe: <valeur>`). nil = pas de forme positionnelle.
+    getter positional : String?
 
     def initialize(
       @name : String,
@@ -32,6 +40,7 @@ module Beryl::Apply
       @arguments : Hash(String, YAML::Any),
       @steps : Array(Step),
       @source_path : String,
+      @positional : String? = nil,
     )
     end
 
@@ -74,6 +83,13 @@ module Beryl::Apply
       parameters = sub_hash(root, "parameters")
       arguments = sub_hash(root, "arguments")
       steps = parse_steps(root, path)
+      positional = root[YAML::Any.new("positional")]?.try(&.as_s?)
+      if positional && !parameters.has_key?(positional)
+        raise InvalidRecipe.new(
+          "recette `#{path}` : `positional: #{positional}` ne correspond à aucun " \
+          "paramètre déclaré."
+        )
+      end
 
       new(
         name: name,
@@ -83,6 +99,7 @@ module Beryl::Apply
         arguments: arguments,
         steps: steps,
         source_path: path,
+        positional: positional,
       )
     end
 

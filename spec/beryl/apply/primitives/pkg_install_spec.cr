@@ -45,4 +45,12 @@ describe Beryl::Apply::PkgInstall do
     result = pkg_install.apply(shell, params("packages: []"), dry_run: false, context: Beryl::Apply::Context.new)
     result.outcome.should eq(Beryl::Apply::Outcome::Skipped)
   end
+
+  it "accepte un paquet seul en string (recette générique pkg-add)" do
+    shell = FakeShell.new
+    shell.stub(/pkg info/, stdout: "")
+    result = pkg_install.apply(shell, params("packages: htop"), dry_run: false, context: Beryl::Apply::Context.new)
+    result.outcome.should eq(Beryl::Apply::Outcome::Applied)
+    shell.ran?(/pkg install -y htop/).should be_true
+  end
 end

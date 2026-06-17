@@ -97,10 +97,16 @@ module Beryl::Apply
       # partout, surchargeables par les parameters/arguments de la recette.
       @context.vars.each { |k, v| vars[k] = v }
       recipe.parameters.each do |key, decl|
-        if dh = decl.as_h?
-          if default = dh[YAML::Any.new("default")]?.try(&.as_s?)
-            vars[key] = default
-          end
+        next unless dh = decl.as_h?
+        # `from_env: VAR` → valeur par défaut depuis le COFFRE (ENV injecté
+        # par `apply_all_credentials_to_env!`) si présente et non vide :
+        # prioritaire sur `default:`, mais surchargée par un argument explicite
+        # (forme map ou positionnelle). Permet `- smtp-relay` nu avec l'adresse
+        # dans le coffre, et `- smtp-relay: autre@x.fr` pour la surcharger.
+        if (env_name = dh[YAML::Any.new("from_env")]?.try(&.as_s?)) && (v = ENV[env_name]?) && !v.empty?
+          vars[key] = v
+        elsif default = dh[YAML::Any.new("default")]?.try(&.as_s?)
+          vars[key] = default
         end
       end
       recipe.arguments.each do |key, value|
@@ -110,6 +116,11 @@ module Beryl::Apply
       end
       # Arguments fournis par l'hôte (apply_recipes forme map) : priorité max.
       extra.each { |k, v| vars[k] = v }
+      # Forme positionnelle (`- pkg-add: htop`) : la valeur réservée est
+      # re-mappée sur le paramètre `positional:` déclaré par la recette.
+      if (pos = recipe.positional) && (pv = extra[Recipe::POSITIONAL_ARG]?)
+        vars[pos] = pv
+      end
       vars
     end
 

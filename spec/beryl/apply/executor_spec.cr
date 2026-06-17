@@ -44,6 +44,49 @@ describe Beryl::Apply::Executor do
     shell.ran?(/pkg install/).should be_false
   end
 
+  it "mappe une valeur positionnelle sur le paramètre `positional:` (forme `- recipe: val`)" do
+    shell = FakeShell.new
+    recipe = Beryl::Apply::Recipe.new(
+      name: "pos-test",
+      description: "",
+      requires: [] of String,
+      parameters: {} of String => YAML::Any,
+      arguments: {} of String => YAML::Any,
+      steps: [Beryl::Apply::Step.new("test-record", {"value" => YAML::Any.new("{{ target }}")})],
+      source_path: "/tmp/pos-test.recipe.yml",
+      positional: "target",
+    )
+    args = {"pos-test" => [{Beryl::Apply::Recipe::POSITIONAL_ARG => "htop"}]}
+    Beryl::Apply::Executor.new(shell, dry_run: false).run([recipe], args)
+    TestRecorder.last_params["value"].as_s.should eq("htop")
+  end
+
+  it "from_env : défaut depuis le coffre (ENV), surchargeable positionnellement" do
+    begin
+      ENV["TEST_RELAY_TO"] = "it@quimeo.fr"
+      shell = FakeShell.new
+      recipe = Beryl::Apply::Recipe.new(
+        name: "fe-test",
+        description: "",
+        requires: [] of String,
+        parameters: {"dest" => YAML.parse("from_env: TEST_RELAY_TO\ndefault: \"\"")},
+        arguments: {} of String => YAML::Any,
+        steps: [Beryl::Apply::Step.new("test-record", {"value" => YAML::Any.new("{{ dest }}")})],
+        source_path: "/tmp/fe-test.recipe.yml",
+        positional: "dest",
+      )
+      # Recette nue → valeur du coffre.
+      Beryl::Apply::Executor.new(shell, dry_run: false).run([recipe], {"fe-test" => [{} of String => String]})
+      TestRecorder.last_params["value"].as_s.should eq("it@quimeo.fr")
+      # Valeur positionnelle → surcharge le coffre.
+      Beryl::Apply::Executor.new(shell, dry_run: false).run(
+        [recipe], {"fe-test" => [{Beryl::Apply::Recipe::POSITIONAL_ARG => "autre@x.fr"}]})
+      TestRecorder.last_params["value"].as_s.should eq("autre@x.fr")
+    ensure
+      ENV.delete("TEST_RELAY_TO")
+    end
+  end
+
   it "interpole {{ var }} depuis arguments (qui priment sur parameters.default)" do
     shell = FakeShell.new
     Beryl::Apply::Executor.new(shell, dry_run: false).run([central_recipe("recorder")])

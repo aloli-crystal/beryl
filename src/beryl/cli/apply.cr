@@ -324,7 +324,8 @@ module Beryl::CLI::Apply
         # → [v1, v2…]). Le produit cartésien donne un jeu d'args par
         # combinaison → fan-out (ex. `user: [deploy, pne]` → 2 jeux).
         raw = {} of String => Array(String)
-        if argh = h.first[1].as_h?
+        argval = h.first[1]
+        if argh = argval.as_h?
           argh.each do |k, v|
             kn = k.as_s? || k.to_s
             if vs = v.as_s?
@@ -333,6 +334,12 @@ module Beryl::CLI::Apply
               raw[kn] = va.compact_map(&.as_s?)
             end
           end
+        elsif va = argval.as_a?
+          # Forme positionnelle liste : `- pkg-add: [a, b, c]` → fan-out.
+          raw[Beryl::Apply::Recipe::POSITIONAL_ARG] = va.compact_map(&.as_s?)
+        elsif vs = argval.as_s?
+          # Forme positionnelle scalaire : `- pkg-add: htop`.
+          raw[Beryl::Apply::Recipe::POSITIONAL_ARG] = [vs]
         end
         expand_args(raw).map { |combo| RecipeRequest.new(rname, combo) }
       else

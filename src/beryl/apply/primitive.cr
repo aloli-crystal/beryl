@@ -83,7 +83,17 @@ module Beryl::Apply
     protected def string_array(params : Hash(String, YAML::Any), key : String) : Array(String)
       val = params[key]?
       return [] of String unless val
-      (val.as_a? || [] of YAML::Any).compact_map(&.as_s?)
+      if arr = val.as_a?
+        arr.compact_map(&.as_s?)
+      elsif (s = val.as_s?) && !s.empty?
+        # Tolère un scalaire string seul → liste à un élément. On NE splitte
+        # PAS sur les espaces : certains appelants (`keys` SSH) contiennent des
+        # espaces légitimes. Permet `pkg-add: { packages: htop }` (+ fan-out
+        # pour une liste).
+        [s]
+      else
+        [] of String
+      end
     end
 
     # Scalaire string depuis `params[key]` (nil si absent ou mal typé).
