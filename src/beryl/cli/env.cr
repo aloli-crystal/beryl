@@ -20,6 +20,11 @@ require "./config_git"
 module Beryl::CLI::Env
   extend self
 
+  # Préfixe des lignes de NOTE injectées dans l'éditeur quand le TOML est
+  # invalide (boucle d'édition de `env edit`). Retirées avant tout
+  # chiffrement → jamais sauvegardées dans le coffre.
+  ERR_MARKER = "#!ERR"
+
   USAGE = <<-USAGE
     USAGE : beryl env <SOUS-COMMANDE> [args]
 
@@ -187,20 +192,37 @@ module Beryl::CLI::Env
                          return 1
                        end
 
-    plaintext_after = Secrets::Editor.edit(plaintext_before, suffix: ".toml")
+    # Boucle d'édition : si le contenu n'est pas du TOML valide, on RÉ-OUVRE
+    # l'éditeur avec ce contenu (cassé) pour le corriger — on ne perd JAMAIS
+    # les éditions. Abandon : re-sauver le même contenu invalide, ou revenir
+    # au contenu d'origine.
+    plaintext_after = plaintext_before
+    last_invalid = nil
+    loop do
+      edited = strip_error_notes(Secrets::Editor.edit(plaintext_after, suffix: ".toml"))
 
-    if plaintext_after == plaintext_before
-      STDOUT.puts "[edit] aucune modification, coffre intact."
-      return 0
-    end
+      if edited == plaintext_before
+        STDOUT.puts "[edit] aucune modification, coffre intact."
+        return 0
+      end
 
-    # Validation TOML avant de chiffrer pour ne pas écrire un coffre cassé.
-    begin
-      ::TOML.parse(plaintext_after)
-    rescue ex
-      STDERR.puts "beryl env edit : le contenu édité n'est pas du TOML valide : #{ex.message}"
-      STDERR.puts "                 le coffre n'a PAS été modifié."
-      return 1
+      # Validation TOML avant de chiffrer pour ne pas écrire un coffre cassé.
+      begin
+        ::TOML.parse(edited)
+        plaintext_after = edited
+        break
+      rescue ex
+        if edited == last_invalid
+          STDERR.puts "beryl env edit : TOML toujours invalide et inchangé — abandon."
+          STDERR.puts "                 le coffre n'a PAS été modifié."
+          return 1
+        end
+        last_invalid = edited
+        STDERR.puts "beryl env edit : TOML invalide — #{ex.message}"
+        STDERR.puts "                 ré-ouverture de l'éditeur pour corriger (vos éditions sont conservées)…"
+        plaintext_after = "#{ERR_MARKER} TOML invalide : #{ex.message}\n" \
+                          "#{ERR_MARKER} Corrigez puis sauvez. Re-sauvez tel quel pour abandonner.\n" + edited
+      end
     end
 
     Dir.mkdir_p(account_dir)
@@ -263,5 +285,13 @@ module Beryl::CLI::Env
   rescue ex
     STDERR.puts "beryl env show : échec — #{ex.message}"
     1
+  end
+
+  # Retire les lignes de note d'erreur (préfixe ERR_MARKER) injectées par la
+  # boucle d'édition de `cmd_edit` — elles ne doivent JAMAIS finir chiffrées.
+  def self.strip_error_notes(s : String) : String
+    # split('\n') + join("\n") préserve le newline final (le dernier élément
+    # vide après le \n terminal est rejoint correctement).
+    s.split('\n').reject(&.starts_with?(ERR_MARKER)).join("\n")
   end
 end
