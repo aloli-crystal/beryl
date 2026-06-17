@@ -221,9 +221,8 @@ module Beryl::CLI
         return
       end
       write_network(host, "proxy_jump", pj)
-      # Le 22 public reste OUVERT — la fermeture (pf) sera une passe dédiée,
-      # validée in-vivo (anti-lockout). Aucun risque de lockout ici.
-      log "✓ chemin vérifié — proxy_jump posé. (Fermeture du 22 = passe pf à venir ; 22 toujours ouvert.)"
+      log "✓ chemin vérifié — proxy_jump posé."
+      offer_close_22(host, pj)
     end
 
     # Pose/maj `network.<key>: value` dans le host.yml (préserve le reste).
@@ -379,11 +378,101 @@ module Beryl::CLI
       conn.exec("uname -s", raise_on_error: false).stdout.strip == "FreeBSD"
     end
 
+    # Shell sudo-capable connecté EXPLICITEMENT par le bastion (host = vrack_ip,
+    # ProxyJump = pj). C'est le chemin vRack → fermer le 22 PUBLIC via ce shell
+    # ne coupe PAS la session (anti-lockout, spec §4). nil si injoignable / sudo KO.
+    private def self.bastion_shell(host : Beryl::Config::ResolvedHost, pj : String) : Beryl::Apply::Shell?
+      ip = host.vrack_ips.first?
+      return nil unless ip
+      cu = connect_user(host)
+      conn = SSH::Connection.new(
+        host: ip, user: cu, port: host.port,
+        identity_file: host.identity_file, options: {"ProxyJump" => pj},
+      )
+      return nil unless conn.exec("uname -s", raise_on_error: false).stdout.strip == "FreeBSD"
+      return Beryl::Apply::SshShell.new(conn) if cu == "root"
+      return nil unless conn.exec("sudo -n true", raise_on_error: false).success?
+      Beryl::Apply::SudoShell.new(Beryl::Apply::SshShell.new(conn))
+    end
+
+    # Ferme le 22 PUBLIC (pf), avec FILET anti-lockout. À n'appeler qu'après que
+    # `proxy_jump` est VÉRIFIÉ. Séquence sûre :
+    #   1. (re)connexion PAR LE BASTION (vRack) → fermer le 22 public ne coupe pas ;
+    #   2. dead-man switch : dans 120s, `pfctl -d` (rollback) SAUF si flag de commit ;
+    #   3. pose des règles pf éprouvées (= recette sshd-vrack-only) + recharge ;
+    #   4. re-vérif joignabilité par le bastion → commit (touch flag) ou rollback.
+    private def self.close_public_22(host : Beryl::Config::ResolvedHost, pj : String) : Bool
+      ip = host.vrack_ips.first?
+      return false unless ip
+      shell = bastion_shell(host, pj)
+      unless shell
+        log "✗ injoignable PAR LE BASTION — on ne ferme PAS le 22 (anti-lockout)."
+        return false
+      end
+      subnet = derive_subnet(ip)
+      # `flags any` sur le pass : laisse passer les paquets MID-STREAM (pas que
+      # les SYN) → la connexion DÉJÀ établie (par le bastion) survit au reload pf
+      # (sinon ses paquets non-SYN sont jetés → blocage ~120s → faux lockout).
+      pfconf = "# Généré par beryl vrack — NE PAS éditer à la main.\n" \
+               "set skip on lo\n" \
+               "pass in quick inet proto tcp from #{subnet} to port 22 flags any\n" \
+               "block in quick proto tcp to port 22\n"
+
+      shell.exec("rm -f /tmp/beryl-pf-committed", raise_on_error: false)
+      # `daemon -f` détache PROPREMENT (session propre, fds → /dev/null) → ne
+      # bloque pas la connexion SSH multiplexée (contrairement à `nohup … &`).
+      shell.exec(
+        "daemon -f /bin/sh -c 'sleep 120; [ -f /tmp/beryl-pf-committed ] || pfctl -d'",
+        raise_on_error: false)
+      log "filet dead-man armé : pf se DÉSACTIVE dans 120s si on perd la main."
+
+      log "→ écriture /etc/pf.conf…"
+      shell.write_file("/etc/pf.conf", pfconf, mode: "0644")
+      log "→ sysrc pf_enable=YES…"
+      shell.exec("sysrc pf_enable=YES", raise_on_error: false)
+      log "→ pfctl -f (charge les règles)…"
+      shell.exec("pfctl -f /etc/pf.conf", raise_on_error: false)
+      log "→ pfctl -e (active pf, idempotent)…"
+      shell.exec("pfctl -e", raise_on_error: false)
+      log "pf chargé : 22 PUBLIC bloqué, vRack #{subnet} autorisé."
+
+      # Vérif via la connexion EXISTANTE (`shell`, déjà établie par le bastion,
+      # état gardé par pf) : si MA session a survécu à la fermeture, on n'est pas
+      # lockout. On NE rouvre PAS de connexion neuve (son SYN se ferait jeter
+      # brièvement après le reload pf → ~120s de retransmission TCP).
+      if shell.exec("uname -s", raise_on_error: false).stdout.strip == "FreeBSD"
+        shell.exec("touch /tmp/beryl-pf-committed", raise_on_error: false) # commit
+        log "✓ session toujours vivante après fermeture → 22 public FERMÉ (commité, dead-man annulé)."
+        true
+      else
+        log "✗ session COUPÉE après fermeture → le dead-man va ROLLBACK (pfctl -d) sous 120s."
+        log "  rien commité ; vérifiez la config réseau puis recommencez."
+        false
+      end
+    end
+
     # Dérive la chaîne `proxy_jump` `<user>@<bastion-fqdn>` depuis le nom (court
     # OU FQDN) du bastion et le domaine du host caché. Pur.
     def self.derive_proxy_jump(connect_user : String, bastion : String, domain : String) : String
       host = bastion.includes?('.') ? bastion : "#{bastion}.#{domain}"
       "#{connect_user}@#{host}"
+    end
+
+    # Dérive le /24 d'une IP (ex. 192.168.42.31 → 192.168.42.0/24). Pur.
+    def self.derive_subnet(ip : String) : String
+      p = ip.split('.')
+      return ip unless p.size == 4
+      "#{p[0]}.#{p[1]}.#{p[2]}.0/24"
+    end
+
+    # Propose (TTY) de fermer le 22 PUBLIC maintenant. Défaut = NON (sûr).
+    private def self.offer_close_22(host : Beryl::Config::ResolvedHost, pj : String) : Nil
+      STDERR.print "Fermer le port 22 PUBLIC maintenant (pf, filet anti-lockout) ? [o/N] : "
+      unless (STDIN.gets || "").strip.downcase == "o"
+        log "22 public laissé OUVERT — relancez `beryl vrack` pour fermer plus tard."
+        return
+      end
+      close_public_22(host, pj)
     end
 
     private def self.log(message : String) : Nil

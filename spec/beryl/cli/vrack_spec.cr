@@ -56,4 +56,14 @@ describe Beryl::CLI::Vrack do
       Beryl::CLI::Vrack.derive_proxy_jump("deploy", "bast.example.net", "quimeo.net").should eq("deploy@bast.example.net")
     end
   end
+
+  describe ".derive_subnet" do
+    it "dérive le /24 d'une IP vRack" do
+      Beryl::CLI::Vrack.derive_subnet("192.168.42.31").should eq("192.168.42.0/24")
+    end
+
+    it "renvoie l'entrée telle quelle si ce n'est pas une IPv4 à 4 octets" do
+      Beryl::CLI::Vrack.derive_subnet("pas-une-ip").should eq("pas-une-ip")
+    end
+  end
 end
