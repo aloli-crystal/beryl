@@ -304,6 +304,106 @@ jusqu'à v0.2 publié.
   bascule vers Option C ou D — gain net : plus besoin de KVM pour
   rebooter.
 
+=== Amendement 20 juin 2026 — périmètre étendu aux datasets sensibles du zroot (« C+ »)
+
+[IMPORTANT]
+.Révision de la décision « pools data uniquement »
+====
+La décision du 25 avril (« périmètre = pools data uniquement, `zroot`
+entièrement clair » — ligne *Périmètre du chiffrement* du tableau
+ci-dessous) est *ÉTENDUE et REMPLACÉE* par celle-ci. Motif concret
+(Philippe, 20 juin 2026) : *aujourd'hui les mots de passe applicatifs
+vivent en clair sous `/home`* (en attendant `aloli-crystal/secrets`).
+Un `zroot` totalement clair laisse donc fuiter des secrets —
+inacceptable.
+
+Périmètre retenu = *Option I / profil `standard`* de
+`boot-and-mount-plan.adoc` (source canonique v0) : on chiffre, EN PLUS
+des pools data, les *datasets sensibles du `zroot`*, déverrouillés par
+`beryl unlock` APRÈS sshd (mécanisme inchangé : ZFS native, `load-key`
+post-boot). PAS d'Option A (bootmini/pivot) — hors scope.
+====
+
+*Layout MINIMAL acté* (les datasets `usr`/`var`/`tmp` du profil
+`standard` sont *fondus dans `/`* — on ne crée un dataset que là où une
+propriété l'exige : chiffrement ou compression) :
+
+[cols="2,2,1,3", options="header"]
+|===
+| Dataset | Montage | Chiffré | Raison
+
+| `zroot/ROOT/default` | `/` (inclut `/usr`,`/var`,`/tmp`,`/bin`…) | non | système FreeBSD public + boot environment (`bectl`)
+| `zroot/zhome`        | `/home`          | *OUI* | mots de passe, données services, apps `deploy`
+| `zroot/zopt`         | `/opt`           | *OUI* | logiciels / données métier
+| `zroot/zusrlocaletc` | `/usr/local/etc` | *OUI* | configs applicatives + clé SSL
+| `zroot/zlog`         | `/var/log`       | non (zstd-3) | clair compressé — boot précoce avant `syslogd` (cf. § Gestion des logs)
+| pools data (`zsave`…) | `/data`…        | *OUI* | données client
+|===
+
+*Clair* (= « de quoi démarrer le réseau ») : `/`, `/etc` (dont
+`/etc/ssh/ssh_host_*` → sshd boote SANS unlock), `/boot`, `/bin`,
+`/sbin`, `/lib`, `/usr` base. *`/var` reste CLAIR* : aucun secret n'y
+vit (ils sont dans `/home` + `/usr/local/etc`), et le chiffrer
+imposerait de gérer l'ordre de boot de `/var/run`/`/var/log` (surcoût
+sans gain).
+
+*Clé* : les 3 datasets chiffrés partagent UN `encryptionroot` commun
+(`zroot/encrypted` invisible / héritage) → un seul `beryl unlock` (ou
+`crystal-clevis-zfs unlock`) les ouvre tous.
+
+*Vocabulaire commercial* : reste « *données et secrets applicatifs
+chiffrés* » (et non « tout chiffré » — les binaires FreeBSD publics du
+`/` restent clairs ; l'Option A « chiffrement total » demeure une
+évolution future).
+
+*Conséquences d'implémentation* (chantier en cours) :
+
+. *bootstrap* : créer `zroot/zhome`, `zroot/zopt`, `zroot/zusrlocaletc`
+  chiffrés (`encryptionroot` partagé) + `zroot/zlog` clair `zstd-3`.
+. *config YAML* : profil `standard` (preset) qui déduit ce layout, ou
+  déclaration explicite des datasets chiffrés du `zroot`.
+. *`beryl unlock`/`lock`/`status`* : étendre des pools data aux
+  datasets `zroot` chiffrés (`zfs load-key` + `mount` ; pas d'`export`
+  pour un dataset interne au pool boot).
+. *`requires_dataset:`* : redémarrage des services après montage.
+. *accès SSH fail-safe* (voir ci-dessous) : root clé-seule TOUJOURS ouvert,
+  clés dans `/root` clair.
+
+==== Accès SSH au boot — porte de secours fail-safe (décidé 20 juin 2026)
+
+Chiffrer `/home` crée un risque de DEADLOCK : les `authorized_keys` de
+l'opérateur y vivent → verrouillées au boot → impossible de se connecter
+pour lancer `beryl unlock`. Sans IPMI, le serveur serait *briqué*.
+
+*Décision : root SSH TOUJOURS ouvert, en CLÉ SEULE.*
+
+* `sshd` : `PermitRootLogin prohibit-password` (jamais `no`, jamais de mot
+  de passe).
+* Clés opérateur déployées dans `/root/.ssh/authorized_keys` — `/root` est
+  dans `zroot/ROOT/default`, donc CLAIR, lisible *avant* tout unlock.
+* `beryl unlock` se connecte en `root` (cohérent : beryl ne wrappe pas ses
+  commandes en `sudo`). Une fois `/home` monté, l'usage quotidien passe par
+  `admin`/`deploy`.
+
+*Pourquoi root TOUJOURS ouvert (et pas fermé-puis-rouvert)* — théorème : sans
+IPMI, le chemin d'accès ne doit JAMAIS pouvoir échouer en position fermée.
+Dès qu'on ferme root en fonctionnement, il faut un ré-ouvreur au boot (rc.d,
+hook d'arrêt) qui peut lui-même échouer (reboot brutal, panic, `--hard`,
+ordre de boot, `/` en RO) → brick irrécupérable, *précisément* lors du reboot
+subi qui est LE cas pour lequel l'unlock existe. Seule la conception « ne
+jamais fermer root » n'a aucun ré-ouvreur à casser. Le durcissement perdu est
+marginal : root clé-seule ≈ `admin` avec `NOPASSWD:ALL`.
+
+*Exposition* : gérée par le RÉSEAU, pas par une bascule d'état. Les hôtes app
+sont cachés derrière le vRack (22 public fermé, accès via bastion `z`) → root
+non exposé publiquement. Les bastions `z` sont publics : root clé-seule y est
+la porte d'entrée assumée (Philippe, 20 juin 2026).
+
+*Durcissement optionnel (futur, opt-in par host)* : un `rc.d` qui ferme root
+quand les datasets sont déverrouillés, ÉCRIT POUR FAIL-OPEN (au moindre doute
+→ root ouvert) et éprouvé sur banc (reboot brutal simulé) avant activation.
+Jamais activé par défaut.
+
 == Décisions pré-validées (à confirmer)
 
 [cols="2,3", options="header"]
@@ -988,6 +1088,64 @@ la clé via Keychain au lieu de fichier en clair.
 
 NOTE: *Tang/GELI* n'est plus dans cette liste depuis le 27 avril
 2026 — voir Option D ci-dessus et `crystal-clevis-geli-handoff.adoc`.
+
+== Gestion des logs — compression, centralisation, rétention (trace des options)
+
+[NOTE]
+.Contexte légal (Philippe, 20 juin 2026)
+====
+*Obligation de conservation des logs UN AN* (loi). La compression
+ci-dessous couvre le *stockage courant* ; la *sauvegarde longue durée*
+(1 an) fait l'objet d'un *chantier dédié à venir* (« sauvegarde des
+logs »), pas de cette feature chiffrement. Cette section garde la
+trace des solutions envisagées pour ne pas les reperdre.
+====
+
+Le dataset `zroot/zlog` (`/var/log`) est *clair* (boot précoce avant
+`syslogd`) mais *compressé `zstd-3`* (ratio 6-10× sur logs texte).
+
+=== 1. Compression — automatique (ZFS), rien à faire
+La compression est au niveau *dataset* : tout fichier écrit sous
+`/var/log` est compressé bloc par bloc, transparent. Pas de `gzip`
+applicatif à prévoir.
+
+=== 2. Centraliser les logs applicatifs sous `/var/log`
+Pour que les logs d'app bénéficient de la compression `zlog`, trois
+approches (évaluées 20 juin 2026) :
+
+. *Symlink* `/var/log/<app>` → dossier d'app — *déconseillé* :
+  fragile (rotation, permissions) et `/home` est *chiffré* (le lien
+  pointerait dans le chiffré, contre-sens).
+. *Configurer l'app pour écrire dans `/var/log/<app>/`* (Rails
+  `config.paths['log']`, nginx `access_log`, postgres `log_directory`)
+  — *recommandé*, robuste.
+. *Dataset enfant `zroot/zlog/<app>`* monté sur `/var/log/<app>`
+  — *recommandé+* : hérite de `zstd-3` ET donne la taille *compressée
+  par app* (`zfs list -o space`). Candidat *recette beryl `app-logs`*
+  (dataset enfant + entrée newsyslog + lien config service).
+
+=== 3. Rotation / rétention courte — `newsyslog`
+`newsyslog` (natif FreeBSD), p.ex. `/usr/local/etc/newsyslog.conf.d/<app>`.
+*Sans le flag `J`/`Z` de gzip* : ZFS compresse déjà → double compression
+= gâchis CPU. `newsyslog` ne sert qu'à tourner/purger.
+
+=== 4. Rétention LÉGALE 1 an — chantier sauvegarde (à venir)
+Options envisagées (à trancher au chantier dédié) :
+
+* *Snapshots ZFS périodiques de `zroot/zlog`* + `zfs send | receive`
+  vers un stockage de sauvegarde (pool `zsave`, serveur de backup, ou
+  cible objet type S3 via relais). Incrémental, intègre la compression.
+* *Log shipping centralisé* : `syslogd`/`syslog-ng` distant vers un
+  collecteur dédié (archivage + recherche). Découple la rétention du
+  serveur applicatif.
+* *Archivage `newsyslog` longue durée* : garder N=365 rotations
+  quotidiennes — simple mais sur le serveur lui-même (pas de
+  résilience hors-site).
+
+NOTE: ces logs longue durée *peuvent contenir des données sensibles*
+(PII dans les requêtes). Le chantier sauvegarde devra décider si
+l'archive 1 an est *chiffrée* (dataset/cible chiffrée) — cohérent avec
+la philosophie « aucun secret en clair ».
 
 == Liens
 
