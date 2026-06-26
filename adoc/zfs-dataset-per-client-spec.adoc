@@ -1,0 +1,99 @@
+= Spec — datasets ZFS par client (déclaratifs, sous le zpool)
+:toc: macro
+:icons: font
+
+Statut : *SPÉCIFIÉ, à développer plus tard* (juin 2026).
+Voir aussi : `zpool-encryption-architecture.adoc`, `apply-recipes-architecture.adoc`,
+mémoire `beryl-prod-server-selection-2026`.
+
+toc::[]
+
+== Problème
+
+Sur les serveurs de sauvegarde (RISE-STOR, pool data raidz2), chaque client doit
+disposer de son propre espace isolé : quota dédié, snapshots GFS propres, point de
+montage propre. Aujourd'hui beryl crée le *pool* au bootstrap mais n'a *aucune*
+primitive pour gérer des *datasets* à chaud. Ajouter un client = opération runtime
+non outillée.
+
+== Vocabulaire (point clé)
+
+Ce n'est *pas* un pool par client — un pool possède des disques physiques, on ne
+peut pas en découper N dans les mêmes disques. L'unité par client est le *dataset*
+(filesystem ZFS dans le pool) : création instantanée, `quota`, `compression`,
+`recordsize`, `mountpoint`, snapshots et clé de chiffrement propres.
+
+== Modèle host.yml
+
+Les datasets se déclarent *sous leur zpool* (un host peut avoir plusieurs pools —
+c'est le pool qui porte ses datasets, pas une liste à plat type `backup_clients`).
+Clé retenue : `datasets:` (terme ZFS natif, cohérent avec `SystemDataset`).
+
+[source,yaml]
+----
+freebsd:
+  zfs:
+    zroot:            # pool boot (mirror SSD)
+      boot: true
+      raid: 1
+      disks: [da0, da1]
+    tank:             # pool data raidz2
+      boot: false
+      raid: 6
+      disks: [da2, da3, da4, da5, da6, da7, da8, da9]
+      datasets:       # ← NOUVEAU : datasets enfants du pool
+        acme:
+          quota: 2T
+          # compression: lz4   (défaut)
+          # recordsize: 1M     (défaut, fichiers ; 16k si réception InnoDB)
+          snapshots: gfs       # 7 quotidiens / 5 hebdo / 12 mensuels
+        globex:
+          quota: 500G
+----
+
+Tri alpha des clés `datasets:` (cf. `beryl fmt` / mémoire `user-sorts-everything-alpha`).
+
+== Sémantique des quotas
+
+Utiliser `quota` (et non `refquota`) : `quota` plafonne *données + snapshots* du
+client → un tenant ne peut pas faire déborder le pool via l'accumulation de
+snapshots GFS. Garde-fou multi-tenant. Alerte monit avant d'atteindre le seuil.
+
+== Primitive `zfs-dataset`
+
+Idempotente, calquée sur `jail-create` (`src/beryl/apply/primitives/jail_create.cr`) :
+
+. `zfs list <pool>/<chemin>` → si présent : ajuster les props divergentes (quota…),
+  sinon `zfs create -o mountpoint=… -o quota=… -o compression=… <pool>/clients/<name>`.
+. Conteneur `<pool>/clients` créé une fois (`canmount=off`).
+. Dry-run : afficher le `zfs create` / les `zfs set` qui seraient exécutés.
+. Jamais de `zfs destroy` implicite (retrait d'un client = opération explicite,
+  hors scope de cette primitive — voir Questions ouvertes).
+
+== Snapshots GFS
+
+Option A (recommandée) : `sanoid` (pkg) — gère nativement la rétention
+quotidienne/hebdo/mensuelle, un template par dataset. Recette pose `sanoid.conf`.
+
+Option B : `cron-entry` (primitive existante) + script `zfs snapshot` + purge maison.
+Plus lourd à maintenir (la logique GFS est non triviale) — éviter sauf refus de dep.
+
+== Recette `client-backup`
+
+Compose : `zfs-dataset` (le dataset + quota) + config snapshots (sanoid) +
+éventuel endpoint de réception (rsync cible / `zfs recv`). Portée host (le
+serveur de sauvegarde). « Ajouter un client » = bloc `datasets:` dans le host.yml
++ `beryl apply`. Idempotent, versionné en git, rejouable sur les futurs RISE-STOR.
+
+== Questions ouvertes
+
+* *Retrait d'un client* : `zfs destroy -r` est destructeur et irréversible.
+  Primitive séparée `zfs-dataset-archive` (rename/hold) plutôt que destroy ?
+  Politique de purge en fin de rétention contractuelle ?
+* *Chiffrement par client* vs clé de pool partagée (cf. `zpool-encryption-architecture.adoc`,
+  `Pool#encryption_root`) : un dataset chiffré par client = isolation cryptographique
+  mais N clés à déverrouiller. Arbitrer.
+* *recordsize* selon la nature des données reçues (fichiers rsync 1M vs flux DB 16k) :
+  exposer par dataset, ou déduire du type de réception ?
+* *Réception DB* : réplica vivant (process MariaDB/PostgreSQL écrivant dans le
+  dataset) vs dumps + rsync — impacte recordsize et le layout.
