@@ -1,0 +1,131 @@
+= Stratégie de sauvegarde — topologie en anneau cross-DC + NAS hors-site
+:toc: macro
+:icons: font
+
+Statut : *VALIDÉ (design)*, juin 2026. Mise en œuvre progressive.
+Voir aussi : `zfs-dataset-per-client-spec.adoc`, `zpool-encryption-architecture.adoc`,
+mémoires `beryl-backup-strategy-2026`, `beryl-prod-server-selection-2026`.
+
+toc::[]
+
+== Inventaire de l'infra
+
+[cols="2,1,4",options="header"]
+|===
+| Rôle | Nb | Détail
+| Production    | 9 | ADV-3 (EPYC 4465P, ECC), 3 par DC × 3 DC, web+DB co-localisés
+| Sauvegarde    | 3 | RISE-STOR (raidz2 ~84 To), 1 par DC
+| Bastion       | 3 | 1 par DC
+| Paquets (PKG) | 1 | poudriere repo signé
+| NAS bureau    | 1 | *futur*, hors-OVH, hors-site
+|===
+
+== Principe directeur : pas de corrélation géographique
+
+NON négociable : *le backup d'un serveur ne réside JAMAIS dans le même datacentre
+que ce serveur*. Leçon OVH SBG2 (incendie mars 2021 : serveurs ET backups voisins
+détruits ensemble).
+
+[source]
+----
+  DC-A: 3 prod ──┐        ┌── RISE-STOR DC-B
+  DC-B: 3 prod ──┼─anneau─┼── RISE-STOR DC-C
+  DC-C: 3 prod ──┘        └── RISE-STOR DC-A
+                              │
+                              ▼  pull, via mesh headscale (WireGuard chiffré)
+                     ┌────────────────────┐
+                     │  super-NAS bureau   │  hors-OVH, hors-site
+                     └────────────────────┘
+----
+
+* *Anneau* : prod DC-A → RISE-STOR DC-B → prod DC-B → RISE-STOR DC-C → … (chaque
+  prod sauvegarde dans un AUTRE DC).
+* *NAS bureau* : TIRE depuis les 3 RISE-STOR (jamais depuis la prod, qu'on
+  n'embête pas), via le mesh headscale (cf. `headscale-setup.adoc`).
+
+== Règle 3-2-1
+
+[cols="1,3",options="header"]
+|===
+| Copie | Emplacement
+| 1 (live)     | la prod elle-même + dump/snapshot local 24h (RTO court)
+| 2 (DR OVH)   | RISE-STOR d'un AUTRE DC (anneau)
+| 3 (hors-site)| super-NAS au bureau, hors-OVH
+|===
+
+La sauvegarde *locale 24h* (erreur logique, suppression accidentelle, RTO court) et
+la sauvegarde *distante* (perte de DC, DR) ne se substituent pas — on garde les deux.
+
+== Classes de données et méthodes
+
+Clé de voûte : *séparer l'historique de la base live*. Embarquer l'historique dans
+la base réelle = perte d'espace et reconstruction lente. Une fois séparé, trois
+classes aux profils distincts :
+
+[cols="2,2,3,2",options="header"]
+|===
+| Donnée | Nature | Méthode | Rétention
+| Base `client` (live)
+| petite, chaude, mutante
+| *Dump logique* `tar.gz` /24h, puis rsync du dump. Redevient rapide une fois
+  l'historique sorti (restauration rapide car base petite).
+| 365 j (versions utiles : petite base)
+
+| Base `client-historique`
+| volumineuse, append-mostly (le passé ne mute pas)
+| *Snapshot ZFS + `zfs send -i`* incrémental. Pas de dump complet quotidien.
+| snapshots mensuels suffisent (immuable)
+
+| GED (fichiers)
+| immuable : nouveau fichier écrit À CÔTÉ, jamais de suppression
+| *`rsync` SANS `--delete`* + snapshots ZFS (versionnement + anti-effacement gratuits)
+| snapshots mensuels suffisent (immuable)
+|===
+
+Rétention différenciée : 365 *versions* n'ont de sens que pour la petite base live.
+GED et historique étant immuables, un snapshot mensuel suffit (rien n'est jamais
+écrasé) → allège fortement le stockage.
+
+== Règle de correction critique : jamais de rsync d'une base VIVANTE
+
+[WARNING]
+====
+On ne rsync JAMAIS les fichiers d'une base de données en service : les fichiers
+changent pendant la copie (torn set), des écritures restent en buffer non flushé
+(InnoDB, WAL) → backup incohérent, *irrestaurable*. Le « ça semble marcher » dure
+jusqu'au jour de la restauration.
+
+La GED supporte le rsync *parce qu'elle est immuable* ; ça ne se transpose pas aux
+bases (qui mutent en continu).
+====
+
+Voies sûres :
+
+. *Dump logique puis rsync du dump* — on rsync le fichier produit, cohérent par
+  construction. `mariadb-dump --single-transaction --quick` / `pg_dump -Fc`. Idéal
+  base live.
+. *Snapshot ZFS + `zfs send -i`* — le vrai « rsync d'une base ». Quiesce bref
+  (`FLUSH TABLES WITH READ LOCK` MariaDB, ou snapshot crash-consistent PostgreSQL),
+  snapshot ATOMIQUE (tous les fichiers de la base sur le même dataset), envoi des
+  deltas. Idéal `client-historique`.
+. *Outils physiques* (`mariabackup`, `pg_basebackup` + WAL/binlog) — gros volumes
+  avec point-in-time recovery.
+
+== Sécurité
+
+* Transport sur vRack privé OU mesh headscale (chiffré) — jamais sur l'IP publique.
+* Datasets de réception chiffrés (cf. `zpool-encryption-architecture.adoc`).
+* Snapshots fréquents = anti-effacement (un attaquant sur la prod ne réécrit pas
+  les snapshots distants).
+* Le NAS bureau TIRE (pull) : compromettre une prod ne donne pas l'accès en écriture
+  au coffre hors-site.
+
+== Reste à faire
+
+* Recette beryl `client-backup` (dataset par client + snapshots + endpoint réception),
+  cf. `zfs-dataset-spec`.
+* Mécanique d'anneau : qui pousse/tire quoi vers quel DC (table d'affectation).
+* Pull NAS bureau : ordonnancement, fenêtre, vérification d'intégrité (scrub côté NAS).
+* Tests de RESTAURATION réguliers (un backup non testé n'est pas un backup) — par
+  classe : dump live, `zfs recv` historique, rsync GED.
+* Centralisation des logs (pipeline séparé) — cf. mémoire, parqué.

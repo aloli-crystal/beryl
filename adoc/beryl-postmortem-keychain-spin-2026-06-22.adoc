@@ -1,0 +1,215 @@
+= Post-mortem : boucle CPU des faux `security` du spec keychain (beryl)
+Philippe
+2026-06-22
+:doctype: article
+:toc: left
+:toclevels: 3
+:sectnums:
+:icons: font
+:source-highlighter: rouge
+:experimental:
+:repo: beryl
+:shard: secrets
+:spec-file: spec/keychain_macos_spec.cr
+:service: dev.aloli.secrets
+
+[abstract]
+== Résumé
+
+Le `2026-06-09`, plusieurs exécutions de `crystal spec` du shard `{shard}`
+(projet `{repo}`) ont laissé derrière elles des processus `/bin/sh` orphelins
+exécutant le faux `security` généré dans `/tmp/cs-keychain-stateful`. Un défaut
+d'analyse d'arguments dans ce faux binaire provoquait une *boucle infinie sans
+pause*, saturant un cœur par instance. Douze jours plus tard, *huit* de ces
+orphelins tournaient encore à ~99 % CPU chacun, portant le `load average` à
+~20 et rendant la machine inutilisable.
+
+La cause racine du spin est aujourd'hui *corrigée dans le source*. Les défauts
+qui ont permis aux processus de *survivre douze jours* (absence de délai de
+garde et de réniement des enfants) restent, eux, à traiter.
+
+== Impact
+
+[cols="1,3",options="header"]
+|===
+| Dimension | Détail
+| Symptôme | Machine « infernale », `console` inutilisable, `git` figé sur un gros dépôt
+| Métrique | `load average` ~20,60 ; 7-8 processus à ~99 % CPU ; `ELAPSED` ~12 j
+| Durée    | `2026-06-09` (création) → `2026-06-22` (détection et résolution)
+| Données  | Aucune perte. Aucun secret exposé (voir _Sécurité_)
+| Portée   | Poste de développement uniquement ; pas de CI ni de production touchées
+|===
+
+== Chronologie
+
+[cols="1,4",options="header"]
+|===
+| Horodatage (2026) | Événement
+| 09 juin 17:36–19:32 | Huit exécutions de `crystal spec` ; chacune laisse un enfant `sh` orphelin (`PPID 1`)
+| 09 juin → 22 juin   | Les huit orphelins bouclent à 99 % CPU, réadoptés par `launchd`
+| 22 juin 17:01       | Détection via `top -o cpu` : 7 lignes `bash` à 98–99 %, `TIME` ~207–209 h
+| 22 juin ~17:03      | `ps`/`lsof`/`sample` confirment : faux `security`, `cwd` `prod-crystal/secrets`, boucle pure
+| 22 juin ~17:05      | `kill` des huit PID → `load average` retombe ; `/tmp/cs-keychain-stateful` disparu
+| 22 juin ~17:10      | `grep` relie l'incident à `{shard}/{spec-file}` et sa copie vendorée `lib/secrets/`
+|===
+
+== Cause racine
+
+=== Le défaut
+
+Le helper de test `with_stateful_security` écrit un faux `security` (script
+`/bin/sh`) dans `/tmp/cs-keychain-stateful`, puis l'expose au backend via
+`ENV["SECURITY_BIN"]`. Ce faux analyse `argv` dans une boucle `while [ $# -gt 0 ]`.
+
+La sémantique réelle de l'option `-w` diffère selon la sous-commande :
+
+[cols="1,2,1",options="header"]
+|===
+| Sous-commande | Rôle de `-w` | Forme dans `argv`
+| `find-generic-password`  | « n'imprimer que le mot de passe » | `-w` *seul*, en dernier
+| `add-generic-password`   | fournir la valeur                  | `-w <value>`
+|===
+
+La version fautive consommait `-w` comme s'il prenait *toujours* une valeur,
+avec un décalage de deux positions :
+
+.Version fautive (reconstituée d'après le symptôme et le commentaire du correctif)
+[source,sh]
+----
+-w) value="$2"; shift 2 ;;    # <1>
+----
+<1> Lorsque `-w` est le *dernier* argument (`find-generic-password ... -w`),
+    il ne reste qu'une position. En `/bin/sh`, `shift 2` avec `$# = 1` *échoue*
+    et ne décrémente pas `$#`. La condition `[ $# -gt 0 ]` reste vraie, `$1`
+    vaut toujours `-w` : la boucle recommence à l'identique, *indéfiniment*.
+
+[WARNING]
+====
+La boucle ne contient ni `sleep` ni opération bloquante : c'est une boucle
+d'attente active (_busy loop_). Chaque instance sature donc un cœur entier en
+permanence. Sept à huit instances → `load average` ~20.
+====
+
+=== Le correctif (déjà présent dans le source)
+
+.Version corrigée (extrait actuel de `{spec-file}`)
+[source,sh]
+----
+-s) service="$2"; shift; [ $# -gt 0 ] && shift ;;
+-a) account="$2"; shift; [ $# -gt 0 ] && shift ;;
+-w) value="$2";   shift; [ $# -gt 0 ] && shift ;;   # <1>
+*)  shift ;;
+----
+<1> On décale *toujours* d'au moins une position pour le drapeau lui-même, puis
+    d'une seconde *uniquement s'il reste une valeur*. `$#` décroît donc
+    strictement à chaque tour.
+
+[IMPORTANT]
+====
+Invariant durable à préserver : *chaque branche du `case` doit décaler au moins
+une fois* (`shift`). Tant que c'est vrai, `$#` décroît strictement et la boucle
+se termine forcément. Toute évolution du faux `security` doit conserver cette
+propriété — c'est la garantie qui rend le spin structurellement impossible.
+====
+
+== Pourquoi les orphelins ont survécu douze jours
+
+Le spin n'explique que la *consommation* CPU. La *survie* tient à trois facteurs
+indépendants, toujours présents même avec le correctif d'analyse d'arguments :
+
+. *Aucune terminaison des enfants à l'interruption du test.* Le bloc `ensure` du
+  helper ne fait que `ENV.delete` et `FileUtils.rm_rf(base)`. Il ne possède pas
+  le `Process` lancé par le backend et ne le tue donc pas. Un test interrompu en
+  plein `fetch` laisse l'enfant vivant.
+. *Aucun délai de garde (timeout).* L'invocation de `security` par le backend
+  n'est pas bornée dans le temps : un faux (ou un vrai) `security` qui ne rend
+  jamais la main bloque sans limite.
+. *Réadoption par `launchd`.* Le parent mort, l'enfant passe en `PPID 1` et
+  échappe à toute fermeture liée au groupe de processus du shell. Bash continue
+  d'exécuter sa copie déjà ouverte (descripteur `fd 255`), insensible à la
+  suppression de `/tmp` comme à la correction du source.
+
+== Signature de diagnostic (réutilisable)
+
+[TIP]
+====
+Pour reconnaître ce motif à l'avenir :
+
+* `top -o cpu` : plusieurs `bash`/`sh` à ~99 % CPU, `MEM` minuscule (~1 Mo),
+  `TIME` qui s'accumule sur des heures.
+* `ps -o pid,ppid,lstart,etime,command -p <pids>` : `PPID 1` (orphelins) +
+  commande pointant un faux binaire sous `/tmp`.
+* `sample <pid> 2` : *aucun* `execve` ni `wait`, uniquement l'interpréteur
+  bash qui boucle (`sigprocmask`/`setjmp`/`longjmp`, `strcmp`/`malloc`/`free`).
+  C'est la marque d'une boucle de script, pas d'un travail réel.
+* `lsof -p <pid> | grep 255` : descripteur 255 sur le script (souvent déjà
+  `(deleted)`), confirmant que bash exécute une copie figée.
+====
+
+== Facteurs aggravants
+
+* *Chemin `/tmp` fixe et partagé.* `/tmp/cs-keychain-stateful` est constant
+  entre exécutions : pas d'isolation entre runs concurrents, et les orphelins
+  d'un run polluent les suivants.
+* *Copie vendorée.* Le même spec existe en double
+  (`{shard}/{spec-file}` et `{repo}/lib/secrets/{spec-file}`) ; un correctif
+  doit être propagé aux deux.
+* *Absence de plafond CPU/temps* sur les processus de test en local (pas de
+  `timeout`, pas de groupe de processus dédié tué en fin de suite).
+
+== Ce qui a bien fonctionné
+
+* Le faux `security` est *entièrement autonome* : il ne délègue jamais au vrai
+  `/usr/bin/security`. L'hypothèse initiale d'une récursion via `PATH` est donc
+  écartée — aucun risque de ce côté.
+* Le secret ne transite jamais par `stdin` ni n'apparaît dans les assertions de
+  log ; les tests vérifient explicitement son absence d'`argv` superflu.
+
+== Sécurité
+
+[NOTE]
+====
+Aucun secret n'a été exposé par cet incident. Le faux `security` n'écrit que
+dans `/tmp/cs-keychain-stateful/state` des valeurs *de test*
+(`AGE-SECRET-KEY-1...` factices), et le vrai trousseau n'est jamais sollicité
+pendant les specs. La master-key réelle du service `{service}` n'a pas été
+touchée.
+====
+
+== Actions de suivi
+
+[cols="1,4,1",options="header"]
+|===
+| État | Action | Priorité
+| ✅ Fait | Garde `[ $# -gt 0 ] && shift` sur `-s`/`-a`/`-w` (invariant : ≥1 `shift` par branche) | —
+| ☐ | Borner l'appel à `security` côté backend par un *délai de garde* ; lever `KeychainError` au dépassement | Haute
+| ☐ | Réniement explicite des enfants : `ensure` qui `terminate`/`wait` tout `Process` lancé, même sur échec de test | Haute
+| ☐ | Isoler le faux binaire dans un répertoire *par run* (p. ex. `File.tempname`) plutôt que `/tmp/cs-keychain-stateful` fixe | Moyenne
+| ☐ | Propager tout correctif à la copie vendorée `lib/secrets/{spec-file}` (ou supprimer le doublon) | Moyenne
+| ☐ | Ajouter un test de non-régression : `find-generic-password ... -w` (drapeau seul) doit rendre la main rapidement | Moyenne
+| ☐ | Vérifier périodiquement l'absence d'orphelins : `pgrep -f cs-keychain` en fin de suite locale | Basse
+|===
+
+[appendix]
+== Commandes de diagnostic et de purge
+
+.Détecter d'éventuels orphelins résiduels
+[source,sh]
+----
+pgrep -fl 'cs-keychain'
+ps -ww -o pid,ppid,lstart,etime,command -p "$(pgrep -f cs-keychain | tr '\n' ',')"
+----
+
+.Purger sans risque (les orphelins n'ont aucun état utile en mémoire)
+[source,sh]
+----
+pkill -f 'cs-keychain' || true
+rm -rf /tmp/cs-keychain-stateful /tmp/cs-keychain-test
+----
+
+.Confirmer le retour à la normale
+[source,sh]
+----
+uptime              # le load average doit redescendre
+top -o cpu -l 1 | head -20
+----
