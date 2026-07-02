@@ -1,0 +1,73 @@
+= Burn-in mémoire au provisioning (parc On-Die ECC)
+:toc: macro
+:icons: font
+
+toc::[]
+
+== Pourquoi
+
+Les serveurs de production (OVH ADVANCE-3, EPYC 4465P) sont équipés de
+**DDR5 On-Die ECC UNIQUEMENT**, *pas* d'ECC sideband (confirmé par OVH,
+2 juillet 2026). Conséquence directe :
+
+* l'On-Die ECC corrige le mono-bit *à l'intérieur* de chaque puce, mais
+  **ne remonte AUCUNE erreur à l'OS** — on ne verra jamais une barrette qui
+  se dégrade en cours de vie (pas d'EDAC/MCA exploitable) ;
+* il ne couvre ni le chemin contrôleur↔barrette, ni le multi-bit.
+
+Puisqu'on ne peut pas *surveiller* la mémoire en vie, on la **valide au
+provisioning** : un test de charge écarte les barrettes franchement
+défaillantes AVANT la mise en production. C'est la contrepartie assumée du
+choix « pas de Scale à ECC registered » (trop cher).
+
+== Quand
+
+* à chaque **nouveau serveur** avant sa première mise en production ;
+* après **tout remplacement de barrette** par le datacentre ;
+* en cas de **doute** (comportement erratique, corruption inexpliquée
+  détectée par les checksums ZFS/PostgreSQL).
+
+== Comment
+
+=== Voie 1 — test matériel OVH (le plus simple)
+
+Depuis l'espace client OVH (ou l'API), lancer le **diagnostic / test
+matériel** du serveur. Il inclut un test mémoire et retourne un rapport.
+C'est non-destructif et ne nécessite pas d'accès rescue.
+
+=== Voie 2 — depuis le rescue Linux
+
+Le rescue OVH permet un test approfondi. Deux options :
+
+* **memtester** (rapide à mettre en place, teste la RAM libre) :
++
+[source,sh]
+----
+apt-get update && apt-get install -y memtester
+# Tester ~90% de la RAM (laisser de la marge au noyau), plusieurs passes :
+memtester 56G 5
+----
+
+* **memtest86+** (le plus rigoureux — teste TOUTE la RAM hors OS) : à
+  démarrer via l'option netboot/ISO OVH quand elle est disponible. Laisser
+  tourner **au moins une passe complète** (idéalement une nuit).
+
+== Critère d'acceptation
+
+**Zéro erreur.** La moindre erreur mémoire = refuser le serveur / demander
+le remplacement de la barrette à OVH avant toute mise en production. Ne
+jamais mettre en prod un serveur dont le burn-in n'est pas passé.
+
+== Surveillance en vie (le relais du burn-in)
+
+Le burn-in valide l'état initial ; ensuite, la détection de corruption
+repose sur les checksums applicatifs et disque, câblés dans `beryl` :
+
+* recette `postgresql` → `initdb --data-checksums` (checksum de page PG) ;
+* recette `zfs-scrub` → scrub périodique + `smartctl -H` + alerte monit ;
+* MariaDB/InnoDB → checksums de page activés par défaut ;
+* sauvegardes 3-2-1 **testées** (restaurations vérifiées) = le vrai filet.
+
+ATTENTION : la réplication PostgreSQL et le miroir NAS ne protègent PAS de
+la corruption mémoire — ils répliquent fidèlement une donnée déjà
+corrompue. Ce sont des outils de haute-disponibilité, pas d'intégrité.
